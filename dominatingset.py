@@ -1,14 +1,3 @@
-#!/usr/bin/env python3
-"""
-QPROG PROJECT - FIXED VERSION (NO HANGING)
-Dominating Set Using Grover's Algorithm - All 8 Sections
-
-FIXED: Removed hanging adaptive strategy analysis
-RUNTIME: 5-10 seconds (complete execution)
-STATUS: ✅ Ready to use
-
-All 8 sections working perfectly
-"""
 
 from itertools import combinations
 import math
