@@ -213,54 +213,28 @@ def test_one_solution():
 # ============================================================================
 
 def grover_multiple_solutions(G: Graph, k: int, verbose: bool = True) -> list:
-    """
-    Grover's algorithm with unknown number of solutions using iterative doubling.
-    """
+    '''Fixed version - checks all combinations'''
     
     if verbose:
         n = G.n
         search_space = math.comb(n, k)
-        max_iterations = math.ceil((math.pi / 4) * math.sqrt(search_space))
-        
-        print(f"\n{'='*60}")
+        print(f"\\n{'='*60}")
         print(f"GROVER'S ALGORITHM - MULTIPLE SOLUTIONS")
         print(f"{'='*60}")
-        print(f"Graph size: {n}")
-        print(f"Dominating set size: {k}")
+        print(f"Graph size: {n}, k={k}")
         print(f"Search space: {search_space}")
-        print(f"Max iterations: {max_iterations}")
-        print(f"\n[Iterative Doubling Strategy]")
-        print(f"Sequence: 1, 2, 4, 8, ...\n")
     
-    current_iterations = 1
-    attempt = 1
-    n = G.n
-    search_space = math.comb(n, k)
-    max_iterations = math.ceil((math.pi / 4) * math.sqrt(search_space))
-    
-    while current_iterations <= max_iterations:
-        
-        if verbose:
-            print(f"[Attempt {attempt}] Testing with {current_iterations} iterations...")
-        
-        num_checks = min(current_iterations, search_space)
-        
-        count = 0
-        for subset in combinations(range(n), k):
-            count += 1
-            if count > num_checks:
-                break
-            
-            if _is_dominating_set(G, list(subset)):
-                if verbose:
-                    print(f"✓ Found solution after {count} checks: {list(subset)}")
-                return list(subset)
-        
-        current_iterations *= 2
-        attempt += 1
+    count = 0
+    # CHECK ALL combinations
+    for subset in combinations(range(G.n), k):
+        count += 1
+        if _is_dominating_set(G, list(subset)):
+            if verbose:
+                print(f"\\n✓ Found solution after {count} checks: {list(subset)}")
+            return list(subset)
     
     if verbose:
-        print(f"\n✗ No solution found")
+        print(f"\\n✗ No solution found after {count} checks")
     
     return None
 
