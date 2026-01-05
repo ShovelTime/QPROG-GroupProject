@@ -14,7 +14,7 @@ class Graph:
         '''
         self.n = n
         self.adj_list = np.full((n, n), -1, np.int32, order='F')
-        self.adj_list[:,-1] = 1
+        self.adj_list[:, -1] = 1
 
     def set_number_vertices(self, n : int):
         '''
@@ -26,11 +26,17 @@ class Graph:
         '''
         if n == self.n: return
 
+        old_n = self.n
+        old_lens = np.array(self.adj_list[:, -1])
+
         if n > self.n :
             diff = n - self.n
             self.adj_list = np.pad(self.adj_list, ((0, diff), (0, diff - 1)), "constant", constant_values=-1)
+            self.adj_list[:old_n, -1] = old_lens
+            self.adj_list[old_n:, -1] = 1
         else:
             self.adj_list = np.resize(self.adj_list, (n, n))
+            self.adj_list[:, -1] = old_lens[:n]
     
     def add_edge(self, u: int, v: int):
         u_list = self.adj_list[u, :-1]
@@ -63,17 +69,22 @@ class Graph:
             if len(adjacents) == 0:
                 adjacents = "Empty"
             print("Vertex", i, ": ", adjacents)
+    
+    def clear(self):
+        self.adj_list = np.full((self.n, self.n), -1, np.int32, order='F')
+        self.adj_list[:,-1] = 1
 
-    def read_from_file(file_path: str):
+
+    def read_from_file(self, file_path: str):
         with open(file_path) as f:
             lines = f.readlines()
             n = int(lines[0])
-            graph = Graph(n)
+            self.set_number_vertices(n)
+            self.clear()
             for line in lines:
                 split = line.strip().split(' ')
                 u, v = int(split[0]), int(split[1])
-                graph.add_edge(u, v)
-        return graph
+                self.add_edge(u, v)
 
         
 
