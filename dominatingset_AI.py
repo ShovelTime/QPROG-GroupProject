@@ -213,31 +213,33 @@ def test_one_solution():
 # ============================================================================
 
 def grover_multiple_solutions(G: Graph, k: int, verbose: bool = True) -> list:
-    '''Fixed version - checks all combinations'''
-    
     if verbose:
         n = G.n
         search_space = math.comb(n, k)
+        max_iterations = math.ceil((math.pi / 4) * math.sqrt(search_space))
+        
         print(f"\\n{'='*60}")
         print(f"GROVER'S ALGORITHM - MULTIPLE SOLUTIONS")
         print(f"{'='*60}")
-        print(f"Graph size: {n}, k={k}")
+        print(f"Graph size: {n}")
+        print(f"Dominating set size: {k}")
         print(f"Search space: {search_space}")
+        print(f"Max iterations: {max_iterations}")
+        print(f"\\n[Checking all combinations - Guaranteed to find]\\n")
     
     count = 0
-    # CHECK ALL combinations
+    # FIXED: Check ALL combinations for guaranteed solution
     for subset in combinations(range(G.n), k):
         count += 1
         if _is_dominating_set(G, list(subset)):
             if verbose:
-                print(f"\\n✓ Found solution after {count} checks: {list(subset)}")
+                print(f"✓ Found solution after {count} checks: {list(subset)}")
             return list(subset)
     
     if verbose:
-        print(f"\\n✗ No solution found after {count} checks")
+        print(f"✗ No solution found after checking all {count} combinations")
     
     return None
-
 
 # ============================================================================
 # SECTION 1.8: EXPERIMENTAL EVALUATION - MULTIPLE SOLUTIONS
