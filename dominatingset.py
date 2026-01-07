@@ -158,7 +158,6 @@ def build_adj_circuit(graph: Graph, output: int | None = None, circuit: QuantumC
             output = circuit.num_qubits - 1
         qubits_range = np.arange(0, circuit.num_qubits)
         combined_ctrl_qubits: list[int] = qubits_range[qubits_range != output][:bit_count * 2].tolist()
-        print(combined_ctrl_qubits)
         ret_val = (circuit, combined_ctrl_qubits)
 
     vertex_bits = numbers_to_bit_matrix(np.arange(0,graph.n, dtype=np.int32), bit_count)
@@ -172,7 +171,6 @@ def build_adj_circuit(graph: Graph, output: int | None = None, circuit: QuantumC
         edge_binary = numbers_to_bit_matrix(edge_arr, bit_count)
 
         u_ctrl_str = "".join(map(str, u_bits))
-        print(u_bits)
         
         for v_bits in edge_binary:
             v_ctrl_str = "".join(map(str, v_bits))
@@ -188,7 +186,7 @@ def build_adj_circuit(graph: Graph, output: int | None = None, circuit: QuantumC
     return ret_val
         
 # I'm assuming A and B are bit lists here
-def init_and_run_adjacent_circuit(graph: Graph, circuit: QuantumCircuit, A: npt.NDArray[np.int32] | list[int], B: npt.NDArray[np.int32] | list[int], output: int) -> bool:
+def init_and_run_adjacent_circuit(graph: Graph, circuit: QuantumCircuit, A: npt.NDArray[np.int32] | list[int], B: npt.NDArray[np.int32] | list[int], output: int):
     try:
         bit_count = int(np.log2(graph.n).astype(dtype=np.uint32, casting='same_value'))
     except ValueError:
@@ -206,9 +204,7 @@ def init_and_run_adjacent_circuit(graph: Graph, circuit: QuantumCircuit, A: npt.
     t_circuit = transpile(circuit, simulator)
     result = simulator.run(t_circuit, shots=10).result()
 
-    print(result.get_counts(t_circuit))
-
-    return True
+    return result.get_counts(t_circuit)
 
 def main():
     G = Graph(4)
