@@ -1,22 +1,37 @@
+from typing import Any, Tuple
 import numpy as np
 import numpy.ma as ma
+import numpy.typing as npt
 
-from typing import IO
+from qiskit import QuantumCircuit
+from qiskit import QuantumRegister
+from qiskit import ClassicalRegister
+
+from qiskit import transpile
+from qiskit_aer import AerSimulator
+from qiskit.providers.basic_provider import BasicSimulator
+
+
+ # bit masks for converting 32-bit integers to binary matrices, see numbers_to_bit_matrix
+__mask = np.array([1 << i for i in range(0,32)]) # bit masks are created in the natural order to ensure little endianess
+#print(__mask)
 
 class Graph:
     def __init__(self, n: int):
         '''
-        Creates Graph stub, preallocates n sublists each holding n-1 elements, which allows for every vertices to be neighbors with every other.
-        Empty neighbour slots are represented as the sentinel value -1, as vertices cannot be represented with a negative value.
+        Creates Graph stub, preallocates n sublists each holding n-1 elements,
+        which allows for every vertices to be neighbors with every other.
+        Empty neighbour slots are represented as the sentinel value -1,
+        as vertices cannot be represented with a negative value.
         
         :param n: vertex count
         :type n: int
         '''
         self.n = n
-        self.adj_list = np.full((n, n), -1, np.int32, order='F')
-        self.adj_list[:, -1] = 1
+        self.adj_list = np.full((n, n + 1), -1, np.int32, order='F')
+        self.adj_list[:, -1] = 0
 
-    def set_number_vertices(self, n : int):
+    def set_number_vertices(self, n: int):
         '''
         Updates vertex count within the graph.
         
@@ -27,33 +42,57 @@ class Graph:
         if n == self.n: return
 
         old_n = self.n
-        old_lens = np.array(self.adj_list[:, -1])
+        old_lens = np.array(self.adj_list[:, -1]).copy()
 
         if n > self.n :
             diff = n - self.n
-            self.adj_list = np.pad(self.adj_list, ((0, diff), (0, diff - 1)), "constant", constant_values=-1)
-            self.adj_list[:old_n, -1] = old_lens
-            self.adj_list[old_n:, -1] = 1
+            self.adj_list = np.pad(self.adj_list[:, :-1], ((0, diff), (0, diff + 1)), "constant", constant_values=-1)
+
+            new_lens = np.zeros(shape=n, dtype=np.int32, order='F')
+            new_lens[:old_n, -1] = old_lens
+            self.adj_list = np.hstack((self.adj_list, new_lens))
         else:
-            self.adj_list = np.resize(self.adj_list, (n, n))
+            self.adj_list = np.resize(self.adj_list, (n, n + 1))
             self.adj_list[:, -1] = old_lens[:n]
     
     def add_edge(self, u: int, v: int):
         u_list = self.adj_list[u, :-1]
         u_len = self.adj_list[u,-1]
-         
-        if v not in u_list:
-            if u_len >= u_list.shape[1]: raise Exception("Attempting to add a neighbour when every vertices should already be neighouring this vertices!")
-            self.adj_list[u_len] = v
+
+        if u_len >= u_list.shape[0]: 
+            raise Exception(f"Vertex {u} has no remaining slots")
+        
+        if u_len == 0:
+            u_list[0] = v
             self.adj_list[u,-1] = u_len + 1
+        else:
+            u_neighbours = u_list[:u_len]
+
+            u_idx = np.searchsorted(u_neighbours, v)
+
+            if u_idx < u_len and u_neighbours[u_idx] == v: return
+
+            u_list[u_idx + 1 : u_len + 1] = u_list[u_idx: u_len]
+            u_list[u_idx] = v
+            self.adj_list[u,-1] = u_len + 1
+
+        if u == v: return
         
         v_list = self.adj_list[v, :-1]
         v_len = self.adj_list[v,-1]
-    
-        if u not in v_list:
-            if v_len >= u_list.shape[1]: raise Exception("Attempting to add a neighbour when every vertices should already be neighouring this vertices!")
-            self.adj_list[v_len] = u
+        if v_len >= v_list.shape[0]: 
+            raise Exception(f"Vertex {u} has no remaining slots") 
+        if v_len == 0:
+            v_list[0] = u
             self.adj_list[v,-1] = v_len + 1
+            return
+        
+        v_neighbours = v_list[:v_len]
+        v_idx = np.searchsorted(v_neighbours, v)
+
+        v_list[v_idx + 1 : v_len + 1] = v_list[v_idx: v_len]
+        v_list[v_idx] = u
+        self.adj_list[v,-1] = v_len + 1
 
     def print(self, with_mask: bool = True):
         print("Adjacency graph with ", self.n, "vertices.\n")
@@ -86,13 +125,105 @@ class Graph:
                 u, v = int(split[0]), int(split[1])
                 self.add_edge(u, v)
 
-        
+    def is_connected(self, u: int, v: int) -> bool:
+        edges = self.adj_list[u]
+        edges = edges[:edges[-1]]
+        idx =  np.searchsorted(edges, v)
+        return idx < len(edges) and edges[idx] == v # type: ignore # idx is guaranteed to be an integer, but the type system cannot see
 
+
+# method adapted from solution posted in https://discuss.datasciencedojo.com/t/how-can-an-array-of-integers-be-converted-into-a-binary-matrix/1056/2
+def numbers_to_bit_matrix(arr: npt.NDArray[np.int32], bit_count: int) -> npt.NDArray[np.uint8]:
+    used_mask = __mask[0:bit_count]
+
+    return (np.bitwise_and(arr[:, None], used_mask) > 0).reshape(-1, bit_count).astype(np.uint8)
+
+#Naive binary circuit to check adjancency
+def build_adj_circuit(graph: Graph, output: int | None = None, circuit: QuantumCircuit | None = None ) -> Tuple[QuantumCircuit, list[int]] :
+    try:
+        bit_count = int(np.log2(graph.n).astype(dtype=np.uint32, casting='same_value'))
+    except ValueError:
+        raise Exception("graph n count must be a number which is a power of 2.")
+
+    if circuit == None:
+        u_reg, v_reg = QuantumRegister(bit_count, "u"), QuantumRegister(bit_count, "v")
+        out = QuantumRegister(1, "output")
+        circuit = QuantumCircuit(u_reg, v_reg, out, ClassicalRegister(1))
+        combined_ctrl_qubits = list(u_reg) + list(v_reg)
+        output = bit_count * 2
+        ret_val = (circuit, list(range(0,6)))
+    else:
+        assert circuit.num_qubits >= bit_count * 2 + 1
+        if output == None:
+            output = circuit.num_qubits - 1
+        qubits_range = np.arange(0, circuit.num_qubits)
+        combined_ctrl_qubits: list[int] = qubits_range[qubits_range != output][:bit_count * 2].tolist()
+        print(combined_ctrl_qubits)
+        ret_val = (circuit, combined_ctrl_qubits)
+
+    vertex_bits = numbers_to_bit_matrix(np.arange(0,graph.n, dtype=np.int32), bit_count)
+
+    for idx in range(0, graph.n):
+        u_bits: np.ndarray = vertex_bits[idx]
+        #u_sign = np.nonzero(u_bits) # get the indices of every bit set to one
+
+        edge_arr = graph.adj_list[idx]
+        edge_arr = edge_arr[:edge_arr[-1]]
+        edge_binary = numbers_to_bit_matrix(edge_arr, bit_count)
+
+        u_ctrl_str = "".join(map(str, u_bits))
+        print(u_bits)
+        
+        for v_bits in edge_binary:
+            v_ctrl_str = "".join(map(str, v_bits))
+
+            ctrl_str = (u_ctrl_str + v_ctrl_str)[::-1]
+            #Doing it this way is REALLY inefficient, the circuit depth will be crazy, and wont scale on a real quantum computer due to accumulated noise.
+            #For some reason we also
+            circuit.mcx(control_qubits=combined_ctrl_qubits, target_qubit=output, ctrl_state=ctrl_str) # add the mcx gate to the circuit
+
+        circuit.barrier()
+    
+    circuit.measure(output, 0)
+    return ret_val
+        
+# I'm assuming A and B are bit lists here
+def init_and_run_adjacent_circuit(graph: Graph, circuit: QuantumCircuit, A: npt.NDArray[np.int32] | list[int], B: npt.NDArray[np.int32] | list[int], output: int) -> bool:
+    try:
+        bit_count = int(np.log2(graph.n).astype(dtype=np.uint32, casting='same_value'))
+    except ValueError:
+        raise Exception("graph n count must be a number which is a power of 2.")
+
+    circuit.clear()
+
+    init_state = '0' + ("".join(map(str, A)) + "".join(map(str, B)))[::-1] # reversed again, "first" zero is actually to zero out the output register
+
+    circuit.initialize(init_state) 
+    
+    _, input_qubits = build_adj_circuit(graph, output, circuit)
+
+    simulator = AerSimulator()
+    t_circuit = transpile(circuit, simulator)
+    result = simulator.run(t_circuit, shots=10).result()
+
+    print(result.get_counts(t_circuit))
+
+    return True
 
 def main():
-    test_graph = Graph(5)
-    test_graph.print()
+    G = Graph(4)
+    G.add_edge(0, 1)
+    G.add_edge(0, 3)
+    G.add_edge(1, 2)
+    G.add_edge(1, 3)
+    G.add_edge(2, 3)
+    G.print()
 
+    edges = numbers_to_bit_matrix(np.array([2,3], np.int32), 2)
+    circuit = QuantumCircuit(5,1)
+    #circuit, list = build_adj_circuit(G, -1)
+    print(init_and_run_adjacent_circuit(G, circuit, edges[0], edges[1], 4))
+    
 
 if __name__=="__main__":
     main()
