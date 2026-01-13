@@ -6,6 +6,9 @@ import numpy.typing as npt
 from qiskit import QuantumCircuit
 from qiskit import QuantumRegister
 from qiskit import ClassicalRegister
+from qiskit.circuit.library import Initialize
+from qiskit.circuit import Instruction
+from qiskit.circuit.library import MCXGate
 
 from qiskit import transpile
 from qiskit_aer import AerSimulator
@@ -162,6 +165,8 @@ def build_adj_circuit(graph: Graph, output: int | None = None, circuit: QuantumC
 
     vertex_bits = numbers_to_bit_matrix(np.arange(0,graph.n, dtype=np.int32), bit_count)
 
+    gates = []
+
     for idx in range(0, graph.n):
         u_bits: np.ndarray = vertex_bits[idx]
         #u_sign = np.nonzero(u_bits) # get the indices of every bit set to one
@@ -177,16 +182,17 @@ def build_adj_circuit(graph: Graph, output: int | None = None, circuit: QuantumC
 
             ctrl_str = (u_ctrl_str + v_ctrl_str)[::-1]
             #Doing it this way is REALLY inefficient, the circuit depth will be crazy, and wont scale on a real quantum computer due to accumulated noise.
-            #For some reason we also
-            circuit.mcx(control_qubits=combined_ctrl_qubits, target_qubit=output, ctrl_state=ctrl_str) # add the mcx gate to the circuit
+            gates.append({'control_qubits':combined_ctrl_qubits, 'target_qubit':output, 'ctrl_state':ctrl_str})
 
-        circuit.barrier()
-    
+    for gate in gates:
+        circuit.mcx(**gate)    
     circuit.measure(output, 0)
+    for gate in reversed(gates):
+        circuit.mcx(**gate) 
     return ret_val
         
 # I'm assuming A and B are bit lists here
-def init_and_run_adjacent_circuit(graph: Graph, circuit: QuantumCircuit, A: npt.NDArray[np.int32] | list[int], B: npt.NDArray[np.int32] | list[int], output: int):
+def init_and_run_adjacent_circuit(graph: Graph, circuit: QuantumCircuit, A: npt.NDArray[np.uint8] | list[int], B: npt.NDArray[np.uint8] | list[int], output: int):
     try:
         bit_count = int(np.log2(graph.n).astype(dtype=np.uint32, casting='same_value'))
     except ValueError:
@@ -206,6 +212,39 @@ def init_and_run_adjacent_circuit(graph: Graph, circuit: QuantumCircuit, A: npt.
 
     return result.get_counts(t_circuit)
 
+def rerun_adjacent_circuit(circuit: QuantumCircuit, A: npt.NDArray[np.uint8] | list[int], B: npt.NDArray[np.int8]):
+    gates = [n for n in reversed(circuit.data) if n.name != 'initialize']
+    init_state = '0' + ("".join(map(str, A)) + "".join(map(str, B)))[::-1]
+    gates.append(Initialize(init_state)) # recreate initial state with new input
+
+    circuit.clear()
+    circuit.append(reversed(gates))
+
+    simulator = AerSimulator()
+    t_circuit = transpile(circuit, simulator)
+    result = simulator.run(t_circuit, shots=10).result()
+
+    return result.get_counts(t_circuit)
+
+# OR implementation without using the builtin OR, or requiring auxiliaries.
+def or_gate(circuit: QuantumCircuit, inputs: list[int], output: int):
+    circuit.x(inputs) # Invert for AND
+    circuit.mcx(inputs, output) # only an initial qubit state of |0> on all inputs will cause this to flip, which will cancel out the incoming NOT on the output gate, which effectively produces an OR-like output.
+    circuit.x(inputs + [output])
+
+def xor_gate(circuit: QuantumCircuit, inputs, output: int):
+    circuit.mcx(inputs[:-1], inputs[-1]) # Invert for AND
+    circuit.cx(inputs[-1], output) # only an initial qubit state of |0> on all inputs will cause this to flip, which will cancel out the incoming NOT on the output gate, which effectively produces an OR-like output.
+    circuit.mcx(inputs[:-1], inputs[-1]) # Revert
+
+
+#Create Dominating sets, expects len(B) + len(A) registers each holding logv2 n bits, plus 2 qubits reserved for output/auxiliary
+def init_run_dominating_set(G: Graph, circuit: QuantumCircuit, A: npt.NDArray[np.uint8] | list[int], B: npt.NDArray[np.uint32] | list[int], auxiliary: int, output: int):
+    circuit.clear()
+
+
+
+
 def main():
     G = Graph(4)
     G.add_edge(0, 1)
@@ -219,6 +258,7 @@ def main():
     circuit = QuantumCircuit(5,1)
     #circuit, list = build_adj_circuit(G, -1)
     print(init_and_run_adjacent_circuit(G, circuit, edges[0], edges[1], 4))
+    print(circuit.data)
     
 
 if __name__=="__main__":
