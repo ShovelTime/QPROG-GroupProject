@@ -182,7 +182,7 @@ def build_adj_circuit(graph: Graph, output: int | None = None, circuit: QuantumC
 
             ctrl_str = (u_ctrl_str + v_ctrl_str)[::-1]
             #Doing it this way is REALLY inefficient, the circuit depth will be crazy, and wont scale on a real quantum computer due to accumulated noise.
-            gates.append({'control_qubits':combined_ctrl_qubits, 'target_qubit':output, 'ctrl_state':ctrl_str})
+            gates.append({'instruction': MCXGate()'qargs':combined_ctrl_qubits + [output], 'ctrl_state':ctrl_str})
 
     for gate in gates:
         circuit.mcx(**gate)    
@@ -232,6 +232,32 @@ def or_gate(circuit: QuantumCircuit, inputs: list[int], output: int):
     circuit.mcx(inputs, output) # only an initial qubit state of |0> on all inputs will cause this to flip, which will cancel out the incoming NOT on the output gate, which effectively produces an OR-like output.
     circuit.x(inputs + [output])
 
+
+# 
+def multi_equiv(circuit: QuantumCircuit, pattern: str, control: list[int], inputs: list[list[int]], auxiliary: int, output: int ) -> list[MCXGate]:
+    '''
+    test if at least one of the input bitstrings and control contains pattern
+    Effectively an expanded OR. 
+    
+    :param circuit: target circuit
+    :type circuit: QuantumCircuit
+    :param pattern: ctrl_state pattern for the desired bitstring. Should already be reversed before passing it to this function
+    :type pattern: str
+    :param control: static qbits that the inputs should be compared against(called B in the case of part 1.3)
+    :type control: list[int]
+    :param inputs: list of qbits compared against control(called A in part 1.3)
+    :type inputs: list[list[int]]
+    :param auxiliary: Auxiliary qbit to control OR-state(can be output)
+    :type auxiliary: int
+    :param output: output qbit
+    :type output: int
+    '''
+    circuit.x(output)
+    ctrl_state = '1' + pattern*2
+    for input in inputs:
+        circuit.mcx()
+    circuit.x(output)
+
 def xor_gate(circuit: QuantumCircuit, inputs, output: int):
     circuit.mcx(inputs[:-1], inputs[-1]) # Invert for AND
     circuit.cx(inputs[-1], output) # only an initial qubit state of |0> on all inputs will cause this to flip, which will cancel out the incoming NOT on the output gate, which effectively produces an OR-like output.
@@ -239,7 +265,7 @@ def xor_gate(circuit: QuantumCircuit, inputs, output: int):
 
 
 #Create Dominating sets, expects len(B) + len(A) registers each holding logv2 n bits, plus 2 qubits reserved for output/auxiliary
-def init_run_dominating_set(G: Graph, circuit: QuantumCircuit, A: npt.NDArray[np.uint8] | list[int], B: npt.NDArray[np.uint32] | list[int], auxiliary: int, output: int):
+def init_run_dominating_set(G: Graph, circuit: QuantumCircuit, A: npt.NDArray[np.uint32] | list[int], B: npt.NDArray[np.uint8] | list[int], auxiliary: int, output: int):
     circuit.clear()
 
 
@@ -258,7 +284,7 @@ def main():
     circuit = QuantumCircuit(5,1)
     #circuit, list = build_adj_circuit(G, -1)
     print(init_and_run_adjacent_circuit(G, circuit, edges[0], edges[1], 4))
-    print(circuit.data)
+    print(circuit)
     
 
 if __name__=="__main__":
