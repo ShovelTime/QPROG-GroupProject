@@ -337,6 +337,336 @@ def init_run_dominating_set(graph: Graph, circuit: QuantumCircuit,
     multi_equiv(circuit, B, np.arange(0, bit_count, dtype=np.uint32), np.arange(bit_count, bit_count * len(A), dtype=np.uint32), auxiliary)
 
 
+# Helper function for bit conversion
+
+def number_to_bits(n: int, bit_count: int) -> List[int]:
+    """Convert single integer to list of bits (LSB first)"""
+    return [(n >> i) & 1 for i in range(bit_count)]
+
+
+# Part 1.3 - Equality Circuit Helper
+
+def equals_circuit(circuit: QuantumCircuit, A: List[int], B: List[int], 
+                  output: int, auxiliary: List[int]):
+    """
+    Sets output=1 if number(A) == number(B), using auxiliary qubits.
+    
+    :param circuit: QuantumCircuit to modify
+    :param A: qubit list for first number (LSB first)
+    :param B: qubit list for second number (LSB first)
+    :param output: output qubit (set to 1 if equal)
+    :param auxiliary: list of auxiliary qubits for intermediate results
+    """
+    bit_count = len(A)
+    
+    # Initialize output to 1 (assume equal)
+    circuit.reset(output)
+    circuit.x(output)
+    
+    # For each bit position, check if A[i] == B[i]
+    for i in range(bit_count):
+        # Compute A[i] XOR B[i] in auxiliary[i]
+        circuit.cx(A[i], auxiliary[i])
+        circuit.cx(B[i], auxiliary[i])
+        
+        # If auxiliary[i] is 1 (bits differ), flip output to 0
+        circuit.cx(auxiliary[i], output)
+        
+        # Uncompute: reset auxiliary[i] to |0⟩
+        circuit.cx(B[i], auxiliary[i])
+        circuit.cx(A[i], auxiliary[i])
+
+
+# Part 1.3 - Dominated Vertex Circuit
+
+def Dominated(G: Graph, circuit: QuantumCircuit, A_list: List[List[int]], 
+             B: List[int], AUX: List[int], b: int):
+    """
+    Sets qubit b to 1 if and only if vertex number(B) is dominated by 
+    some vertex in {number(A_1), ..., number(A_k)}.
+    
+    :param G: Graph instance
+    :param circuit: QuantumCircuit to modify
+    :param A_list: list of k registers (each is list of qubit indices)
+    :param B: register for vertex to check (list of qubit indices)
+    :param AUX: list of auxiliary qubits (at least 2 needed)
+    :param b: output qubit (set to 1 if dominated)
+    """
+    k = len(A_list)
+    bit_count = len(A_list[0])
+    
+    # Initialize output to 0
+    circuit.reset(b)
+    
+    # For each candidate vertex A_i
+    for i in range(k):
+        A_i = A_list[i]
+        
+        # Reset auxiliary qubits
+        circuit.reset(AUX[0])
+        if len(AUX) > 1:
+            circuit.reset(AUX[1])
+        
+        # TEST 1: Check if B == A_i
+        aux_for_equals = [AUX[1]] if len(AUX) > 1 else []
+        equals_circuit(circuit, A_i, B, AUX[0], aux_for_equals)
+        
+        # OR result into output b
+        circuit.cx(AUX[0], b)
+        
+        # Reset auxiliary[0]
+        circuit.reset(AUX[0])
+        
+        # TEST 2: Check if {B, A_i} is an edge
+        Adj(G, circuit, A_i, B, AUX[0])
+        
+        # OR result into output b
+        circuit.cx(AUX[0], b)
+        
+        # Uncompute Adj back to |0⟩
+        Adj(G, circuit, A_i, B, AUX[0])
+        
+        # Reset auxiliary for next iteration
+        circuit.reset(AUX[0])
+        if len(AUX) > 1:
+            circuit.reset(AUX[1])
+
+
+# Part 1.4 - All Dominated Circuit (Verifier)
+
+def AllDominated(G: Graph, circuit: QuantumCircuit, A_list: List[List[int]], 
+                AUX: List[int], b: int):
+    """
+    Sets qubit b to 1 if and only if ALL vertices of G are dominated by 
+    {number(A_1), ..., number(A_k)}.
+    
+    This is the verifier circuit for the dominating set problem.
+    
+    :param G: Graph instance
+    :param circuit: QuantumCircuit to modify
+    :param A_list: list of k registers (dominating set candidates)
+    :param AUX: auxiliary qubits (needs at least 2)
+    :param b: output qubit
+    """
+    k = len(A_list)
+    bit_count = len(A_list[0])
+    
+    # Initialize output to 1 (assume all dominated)
+    circuit.reset(b)
+    circuit.x(b)
+    
+    # For each vertex v in the graph
+    for v in range(G.n):
+        # Reset auxiliary qubits
+        circuit.reset(AUX[0])
+        if len(AUX) > 1:
+            circuit.reset(AUX[1])
+        
+        # Create temporary register for vertex v
+        v_bits = number_to_bits(v, bit_count)
+        temp_v_reg = list(range(circuit.num_qubits - bit_count, circuit.num_qubits))
+        
+        # Initialize temp_v_reg to |v⟩
+        for i in range(bit_count):
+            if v_bits[i] == 1:
+                circuit.x(temp_v_reg[i])
+        
+        # Check if vertex v is dominated by A_list
+        Dominated(G, circuit, A_list, temp_v_reg, AUX, AUX[0])
+        
+        # AND result into output b
+        circuit.x(AUX[0])
+        circuit.cx(AUX[0], b)
+        circuit.x(AUX[0])
+        
+        # Uncompute Dominated
+        Dominated(G, circuit, A_list, temp_v_reg, AUX, AUX[0])
+        
+        # Clean up temp_v_reg
+        for i in range(bit_count):
+            if v_bits[i] == 1:
+                circuit.x(temp_v_reg[i])
+        
+        # Reset auxiliary qubits
+        circuit.reset(AUX[0])
+        if len(AUX) > 1:
+            circuit.reset(AUX[1])
+
+
+# Grover's Algorithm - Diffusion Operator
+
+def diffusion_operator(circuit: QuantumCircuit, qubits: List[int]):
+    """
+    Apply the diffusion operator: D = 2|s⟩⟨s| - I
+    
+    :param circuit: QuantumCircuit to modify
+    :param qubits: list of qubits to apply diffusion to
+    """
+    # Apply Hadamard to all qubits
+    for qubit in qubits:
+        circuit.h(qubit)
+    
+    # Apply X to all qubits
+    for qubit in qubits:
+        circuit.x(qubit)
+    
+    # Apply multi-controlled Z gate (phase flip)
+    if len(qubits) > 1:
+        circuit.h(qubits[-1])
+        if len(qubits) == 2:
+            circuit.cx(qubits[0], qubits[-1])
+        else:
+            circuit.mcx(qubits[:-1], qubits[-1])
+        circuit.h(qubits[-1])
+    
+    # Apply X to all qubits
+    for qubit in qubits:
+        circuit.x(qubit)
+    
+    # Apply Hadamard to all qubits
+    for qubit in qubits:
+        circuit.h(qubit)
+
+
+#  Grover's Algorithm (One Solution)
+
+def grover_one_solution(G: Graph, k: int, num_iterations: Optional[int] = None) -> List[int]:
+    """
+    Use Grover's algorithm to search for a dominating set of size k.
+    
+    :param G: Graph instance
+    :param k: size of dominating set to find
+    :param num_iterations: number of Grover iterations (default: optimal)
+    :return: list of vertex indices forming dominating set
+    """
+    try:
+        bit_count = int(np.log2(G.n))
+    except ValueError:
+        raise Exception("Graph size must be a power of 2")
+    
+    # Total qubits needed
+    num_input_qubits = k * bit_count
+    num_aux_qubits = 3
+    total_qubits = num_input_qubits + 1 + num_aux_qubits + bit_count
+    
+    circuit = QuantumCircuit(total_qubits, num_input_qubits)
+    
+    # Input register
+    input_qubits = list(range(num_input_qubits))
+    
+    # Output qubit for verifier
+    output_qubit = num_input_qubits
+    
+    # Auxiliary qubits
+    aux_qubits = list(range(num_input_qubits + 1, num_input_qubits + 1 + num_aux_qubits))
+    temp_qubits = list(range(num_input_qubits + 1 + num_aux_qubits, total_qubits))
+    
+    # Reshape input qubits into k registers of bit_count qubits each
+    A_list = [input_qubits[i*bit_count:(i+1)*bit_count] for i in range(k)]
+    
+    # Step 1: Initialize superposition
+    for qubit in input_qubits:
+        circuit.h(qubit)
+    
+    # Step 2: Calculate optimal iterations
+    search_space_size = G.n ** k
+    if num_iterations is None:
+        num_iterations = max(1, int(np.pi / 4 * np.sqrt(search_space_size)))
+    
+    print(f"Search space: {search_space_size}, Iterations: {num_iterations}")
+    
+    # Step 3: Grover iterations
+    for iteration in range(num_iterations):
+        # Oracle: Apply verifier
+        AllDominated(G, circuit, A_list, aux_qubits + temp_qubits, output_qubit)
+        
+        # Phase flip
+        circuit.z(output_qubit)
+        
+        # Uncompute verifier
+        AllDominated(G, circuit, A_list, aux_qubits + temp_qubits, output_qubit)
+        
+        # Diffusion operator
+        diffusion_operator(circuit, input_qubits)
+    
+    # Step 4: Measure
+    circuit.measure(input_qubits, list(range(num_input_qubits)))
+    
+    # Execute
+    simulator = AerSimulator()
+    t_circuit = transpile(circuit, simulator)
+    result = simulator.run(t_circuit, shots=1).result()
+    counts = result.get_counts(t_circuit)
+    
+    # Get measurement result
+    measured_bitstring = list(counts.keys())[0]
+    
+    # Convert bitstring to vertex list
+    vertices = []
+    for i in range(k):
+        bits = measured_bitstring[i*bit_count:(i+1)*bit_count]
+        vertex = int(bits[::-1], 2)
+        vertices.append(vertex)
+    
+    return vertices
+
+
+# Grover's Algorithm (Multiple Solutions)
+
+def grover_multiple_solutions(G: Graph, k: int) -> Optional[List[int]]:
+    """
+    Grover's algorithm with unknown number of solutions.
+    
+    :param G: Graph instance
+    :param k: size of dominating set to find
+    :return: list of vertex indices or None
+    """
+    search_space_size = G.n ** k
+    max_iterations = int(np.sqrt(search_space_size)) + 1
+    
+    iterations = 1
+    attempt = 0
+    
+    while iterations <= max_iterations:
+        print(f"\nAttempt {attempt + 1}: Trying with {iterations} iterations...")
+        
+        try:
+            result = grover_one_solution(G, k, num_iterations=iterations)
+            
+            if verify_dominating_set(G, result, k):
+                print(f"✓ Found: {result}")
+                return result
+            else:
+                print(f"✗ Not valid: {result}")
+        except Exception as e:
+            print(f"✗ Error: {e}")
+        
+        iterations *= 2
+        attempt += 1
+    
+    print("No solution found")
+    return None
+
+
+#  Verification Helper
+
+def verify_dominating_set(G: Graph, vertices: List[int], k: int) -> bool:
+    """Classically verify if a set of vertices forms a dominating set."""
+    if len(vertices) != k:
+        return False
+    
+    if not all(0 <= v < G.n for v in vertices):
+        return False
+    
+    vertex_set = set(vertices)
+    for v in range(G.n):
+        if v not in vertex_set:
+            edge_count = int(G.adj_list[v, -1])
+            neighbors = G.adj_list[v, :edge_count]
+            if not any(neighbor in vertex_set for neighbor in neighbors):
+                return False
+    
+    return True
 
 
 
