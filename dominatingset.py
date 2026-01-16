@@ -160,7 +160,7 @@ def bit_matrix_to_numbers(bit_matrix: NDArray[np.uint8]) -> NDArray[np.int32]:
 #Naive binary circuit to check adjancency
 def build_adj_circuit(graph: Graph, output: Optional[int] = None, circuit: Optional[QuantumCircuit] = None) -> Tuple[QuantumCircuit, List[int]]:
     try:
-        bit_count = int(np.log2(graph.n))
+        bit_count = np.array(np.log2(graph.n)).astype(np.uint32, casting='same_value')[0]
     except ValueError:
         raise Exception("graph n count must be a number which is a power of 2.")
 
@@ -270,7 +270,7 @@ def invert_adjancency_of_edge(graph: Graph, circuit: QuantumCircuit,
 # I'm assuming A and B are bit lists here
 def init_and_run_adjacent_circuit(graph: Graph, circuit: QuantumCircuit, A: NDArray[np.uint8], B: NDArray[np.uint8], output: int):
     try:
-        bit_count = int(np.log2(graph.n))
+        bit_count = np.array(np.log2(graph.n)).astype(np.uint32, casting='same_value')[0]
     except ValueError:
         raise Exception("graph n count must be a number which is a power of 2.")
 
@@ -371,7 +371,7 @@ def dominating_node(graph: Graph, circuit: QuantumCircuit,
                            B_register: NDArray[np.uint32] | None = None,
                            A_registers: NDArray[np.uint32] | None = None):
     try:
-        bit_count = int(np.log2(graph.n))
+        bit_count = np.array(np.log2(graph.n)).astype(np.uint32, casting='same_value')[0]
     except ValueError:
         raise Exception("graph n-count must be a number which is a power of 2.")
     
@@ -409,7 +409,7 @@ def invert_dominating_node(graph: Graph, circuit: QuantumCircuit,
 
 def dominating_set(graph: Graph, circuit: QuantumCircuit, A: NDArray[np.uint8], auxiliary: NDArray[np.uint32], output: int):
     try:
-        bit_count = int(np.log2(graph.n))
+        bit_count = np.array(np.log2(graph.n)).astype(np.uint32, casting='same_value')[0]
     except ValueError:
         raise Exception("graph n-count must be a number which is a power of 2.")
     
