@@ -1,4 +1,4 @@
-from typing import Any, Tuple
+from typing import Any, Tuple, Union, Optional, List
 import numpy as np
 import numpy.ma as ma
 import numpy.typing as npt
@@ -245,7 +245,7 @@ def invert_adjancency_of_edge(graph: Graph, circuit: QuantumCircuit, output: int
         circuit.barrier()    
 
 # I'm assuming A and B are bit lists here
-def init_and_run_adjacent_circuit(graph: Graph, circuit: QuantumCircuit, A: npt.NDArray[np.uint8] | list[int], B: npt.NDArray[np.uint8] | list[int], output: int):
+def init_and_run_adjacent_circuit(graph: Graph, circuit: QuantumCircuit, A: Union[npt.NDArray[np.uint8], List[int]], B: Union[npt.NDArray[np.uint8], List[int]], output: int):
     try:
         bit_count = int(np.log2(graph.n).astype(dtype=np.uint32, casting='same_value'))
     except ValueError:
@@ -265,7 +265,9 @@ def init_and_run_adjacent_circuit(graph: Graph, circuit: QuantumCircuit, A: npt.
 
     return result.get_counts(t_circuit)
 
-def rerun_adjacent_circuit(circuit: QuantumCircuit, A: npt.NDArray[np.uint8] | list[int], B: npt.NDArray[np.int8]):
+def rerun_adjacent_circuit(circuit: QuantumCircuit, 
+                          A: Union[npt.NDArray[np.uint8], List[int]], 
+                          B: Union[npt.NDArray[np.int8], List[int]]):
     gates = [n for n in reversed(circuit.data) if n.name != 'initialize']
     init_state = '0' + ("".join(map(str, A)) + "".join(map(str, B)))[::-1]
     gates.append(Initialize(init_state)) # recreate initial state with new input
@@ -322,7 +324,11 @@ def xor_gate(circuit: QuantumCircuit, inputs, output: int):
 
 
 #Create Dominating sets, expects len(B) + len(A) registers each holding logv2 n bits, plus 2 qubits reserved for output/auxiliary
-def init_run_dominating_set(graph: Graph, circuit: QuantumCircuit, A: npt.NDArray[np.uint32] | list[int], B: npt.NDArray[np.uint8], auxiliary: int, output: int):
+def init_run_dominating_set(graph: Graph, circuit: QuantumCircuit, 
+                           A: Union[npt.NDArray[np.uint32], List[int]], 
+                           B: npt.NDArray[np.uint8], 
+                           auxiliary: int, 
+                           output: int):
     try:
         bit_count = int(np.log2(graph.n).astype(dtype=np.uint32, casting='same_value'))
     except ValueError:
