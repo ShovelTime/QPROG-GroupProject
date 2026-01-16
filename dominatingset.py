@@ -308,13 +308,17 @@ def initialize(circuit: QuantumCircuit, bit_pattern: NDArray[np.uint8], register
     for idx in indices:
         circuit.x(registers[idx], label='initialize')
 
+#Alias for initialize, since the inverse of it is the same.
+def deinitialize(circuit: QuantumCircuit, bit_pattern: NDArray[np.uint8], registers: NDArray[np.uint32]):
+    initialize(circuit, bit_pattern, registers)
+
 # OR implementation without using the builtin OR, or requiring auxiliaries.
 def or_gate(circuit: QuantumCircuit, inputs: list[int], output: int):
     circuit.x(inputs) # Invert for AND
     circuit.mcx(inputs, output) # only an initial qubit state of |0> on all inputs will cause this to flip, which will cancel out the incoming NOT on the output gate, which effectively produces an OR-like output.
     circuit.x(inputs + [output])
 
-def xor_gate(circuit: QuantumCircuit, inputs, output: int):
+def xor_gate(circuit: QuantumCircuit, inputs: list[int], output: int):
     circuit.mcx(inputs[:-1], inputs[-1]) # Invert for AND
     circuit.cx(inputs[-1], output) # if every bit was 1, then inputs[-1] will be zero, causing no flip
     circuit.mcx(inputs[:-1], inputs[-1]) # Revert
@@ -363,15 +367,17 @@ def invert_multi_equiv(circuit: QuantumCircuit, ctrl_bits: NDArray[np.uint8], co
 def dominating_node(graph: Graph, circuit: QuantumCircuit, 
                            A: NDArray[np.uint8], 
                            B: NDArray[np.uint8], 
-                           auxiliary: int):
+                           auxiliary: int,
+                           B_register: NDArray[np.uint32] | None = None,
+                           A_registers: NDArray[np.uint32] | None = None):
     try:
         bit_count = int(np.log2(graph.n))
     except ValueError:
         raise Exception("graph n-count must be a number which is a power of 2.")
     
     node = np.asarray(bit_matrix_to_numbers(B))[0]
-    B_register = np.arange(0, bit_count, dtype=np.uint32)
-    A_registers = np.arange(bit_count, bit_count * (len(A) + 1), dtype=np.uint32).reshape(len(A), bit_count)
+    if B_register is None: B_register = np.arange(0, bit_count, dtype=np.uint32)
+    if A_registers is None: A_registers = np.arange(bit_count, bit_count * (len(A) + 1), dtype=np.uint32).reshape(len(A), bit_count)
     
     multi_equiv(circuit, B, B_register, A_registers, auxiliary)
     circuit.x(auxiliary)
@@ -383,287 +389,73 @@ def invert_dominating_node(graph: Graph, circuit: QuantumCircuit,
                            A: NDArray[np.uint8], 
                            B: NDArray[np.uint8], 
                            auxiliary: int, 
-                           output: int):
+                           B_register: NDArray[np.uint32] | None = None,
+                           A_registers: NDArray[np.uint32] | None = None):
     try:
         bit_count = int(np.log2(graph.n))
     except ValueError:
         raise Exception("graph n-count must be a number which is a power of 2.")
     
     node = np.asarray(bit_matrix_to_numbers(B))[0]
-    B_register = np.arange(0, bit_count, dtype=np.uint32)
-    A_registers = np.arange(bit_count, bit_count * (len(A) + 1), dtype=np.uint32).reshape(len(A), bit_count)
+    if B_register is None: B_register = np.arange(0, bit_count, dtype=np.uint32)
+    if A_registers is None: A_registers = np.arange(bit_count, bit_count * (len(A) + 1), dtype=np.uint32).reshape(len(A), bit_count)
 
     circuit.x(auxiliary)
-    invert_adjancency_of_edge(graph, circuit, auxiliary, output, node, bit_count, B_register, A_registers)
+    invert_adjancency_of_edge(graph, circuit, auxiliary, auxiliary, node, bit_count, B_register, A_registers)
     circuit.x(auxiliary)
     invert_multi_equiv(circuit, B, B_register, A_registers, auxiliary)
 
 
 
-def dominating_set(graph: Graph, circuit: QuantumCircuit, A: NDArray[np.uint8], auxiliary: int, output: int):
+def dominating_set(graph: Graph, circuit: QuantumCircuit, A: NDArray[np.uint8], auxiliary: NDArray[np.uint32], output: int):
     try:
         bit_count = int(np.log2(graph.n))
     except ValueError:
         raise Exception("graph n-count must be a number which is a power of 2.")
     
+    if output in auxiliary:
+        raise Exception("Output cannot be an auxiliary qubit for this implementation!")
+    if len(auxiliary) < 2:
+        raise Exception("dominating_set() needs at least 2 auxiliary qubits!")
+    
+    
     vertex_bits = numbers_to_bit_matrix(np.array(np.arange(0, graph.n), np.uint32), bit_count)
 
+    assert circuit.num_qubits >= bit_count * len(A) + 3
+
+    register_range = np.arange(0, bit_count*len(A) + 1, dtype=np.uint32)
+
+    assert output not in register_range and auxiliary not in register_range
+
+    initialize(circuit, vertex_bits.flatten(), register_range[bit_count:]) # Initialize A's qubits
+
+    #circuit.x([output,auxiliary[1]]) # assume true, if something returns a false result, we will invert the output.
+    circuit.x(output)
+
+    offset = 0
+
     for u_bits in vertex_bits:
-        dominating_node(graph, circuit, A, u_bits, auxiliary)
+        initialize(circuit, u_bits, register_range[:bit_count])
 
-# Grover's Algorithm - Diffusion Operator
+        dominating_node(graph, circuit, A, u_bits, auxiliary[0])
+        #circuit.x(auxiliary[0])
 
-def diffusion_operator(circuit: QuantumCircuit, qubits: List[int]):
-    """
-    Apply the diffusion operator: D = 2|s⟩⟨s| - I
-    
-    :param circuit: QuantumCircuit to modify
-    :param qubits: list of qubits to apply diffusion to
-    """
-    # Apply Hadamard to all qubits
-    for qubit in qubits:
-        circuit.h(qubit)
-    
-    # Apply X to all qubits
-    for qubit in qubits:
-        circuit.x(qubit)
-    
-    # Apply multi-controlled Z gate (phase flip)
-    if len(qubits) > 1:
-        circuit.h(qubits[-1])
-        if len(qubits) == 2:
-            circuit.cx(qubits[0], qubits[-1])
-        else:
-            circuit.mcx(qubits[:-1], qubits[-1])
-        circuit.h(qubits[-1])
-    
-    # Apply X to all qubits
-    for qubit in qubits:
-        circuit.x(qubit)
-    
-    # Apply Hadamard to all qubits
-    for qubit in qubits:
-        circuit.h(qubit)
-
-def _is_dominating_set(G: Graph, vertices: list) -> bool:
-    """Check if vertices form a dominating set."""
-    vertices_set = set(vertices)
-    
-    for v in range(G.n):
-        if v in vertices_set:
-            continue
+        # if 1 1 0 
+        circuit.cx(auxiliary[1], output) # 1 1 1
+        circuit.cx(auxiliary[1], auxiliary[0]) # If the fail flag is set, we do not invert a fail result
         
-        is_dominated = False
-        for u in vertices_set:
-            if G.is_connected(u, v):
-                is_dominated = True
-                break
-        
-        if not is_dominated:
-            return False
-    
-    return True
 
-def _count_dominating_sets(G: Graph, k: int) -> int:
-    """Count all dominating sets of size k."""
-    count = 0
-    for subset in combinations(range(G.n), k):
-        if _is_dominating_set(G, list(subset)):
-            count += 1
-    return count
+        circuit.ccx(auxiliary[0], output, auxiliary[1]) # Set 'Fail' Flag if result of dominating_node is False
+        circuit.ccx(auxiliary[0], auxiliary[1], output) # set output to zero if Fail is set
+        circuit.cx([auxiliary[1]], output)
 
-#  GROVER WITH ONE SOLUTION
+        #circuit.x(auxiliary[0])
+        invert_dominating_node(graph, circuit, A, u_bits, auxiliary[0])
 
-def grover_one_solution(G: Graph, k: int, verbose: bool = True) -> list:
-    """
-    Grover's algorithm assuming exactly one dominating set of size k.
-    """
-    
-    if verbose:
-        n = G.n
-        search_space = math.comb(n, k)
-        iterations = math.ceil((math.pi / 4) * math.sqrt(search_space))
-        
-        print(f"\n{'='*60}")
-        print(f"GROVER'S ALGORITHM - ONE SOLUTION")
-        print(f"{'='*60}")
-        print(f"Graph size: {n}")
-        print(f"Dominating set size: {k}")
-        print(f"Search space: C({n},{k}) = {search_space}")
-        print(f"Optimal iterations: {iterations}")
-        print(f"\n[Simplified Implementation]")
-        print(f"Note: Full Grover requires {k * ((n-1).bit_length() if n > 1 else 1)} qubits")
-        print(f"Checking potential dominating sets...")
-    
-    count = 0
-    for subset in combinations(range(G.n), k):
-        count += 1
-        if _is_dominating_set(G, list(subset)):
-            if verbose:
-                print(f"\n Found solution after {count} checks: {list(subset)}")
-                print(f"Correct: {_is_dominating_set(G, list(subset))}")
-            return list(subset)
-    
-    if verbose:
-        print(f"\n No solution found")
-    
-    return None
+        deinitialize(circuit, u_bits, register_range[:bit_count])
 
-
-# EXPERIMENTAL EVALUATION - ONE SOLUTION
-
-def test_one_solution():
-    """Test Grover on small graphs with single solution."""
-    
-    print("\n" + "="*70)
-    print("EXPERIMENTAL EVALUATION - ONE SOLUTION")
-    print("="*70)
-    
-    # Test Case 1: 4-node path
-    print("\n[Test 1] 4-node graph, dominating set size 2\n")
-    G1 = Graph(4)
-    G1.add_edge(0, 1)
-    G1.add_edge(1, 2)
-    G1.add_edge(2, 3)
-    
-    print("Graph with 4 vertices:")
-    print("Vertex     Neighbors")
-    print("-" * 30)
-    for v in range(G1.n):
-        print(f"{v:<10} {str(G1.adj_list[v]):<20}")
-    
-    print("\nExpected solution: {1, 2}\n")
-    
-    start = time.time()
-    solution = grover_one_solution(G1, k=2, verbose=True)
-    elapsed = time.time() - start
-    
-    if solution:
-        print(f"Time: {elapsed:.4f}s\n")
-    
-    # Test Case 2: 8-node star
-    print("\n" + "-"*70)
-    print("\n[Test 2] 8-node graph, dominating set size 2\n")
-    G2 = Graph(8)
-    for i in range(1, 8):
-        G2.add_edge(0, i)
-    
-    print("Graph structure: Star with center 0\n")
-    print("Expected solution: {0, ...} (vertex 0 dominates most)\n")
-    
-    start = time.time()
-    solution = grover_one_solution(G2, k=2, verbose=True)
-    elapsed = time.time() - start
-    
-    if solution:
-        print(f"Time: {elapsed:.4f}s\n")
-    
-    # Test Case 3: 16-node grid
-    print("\n" + "-"*70)
-    print("\n[Test 3] 16-node graph, dominating set size 4")
-    print("Created 16-node graph with connections")
-    print("Finding dominating set of size 4...\n")
-    
-    G3 = Graph(16)
-    for i in range(16):
-        for j in range(i+1, 16):
-            if (i % 4) == (j % 4) or (i // 4) == (j // 4):
-                G3.add_edge(i, j)
-    
-    start = time.time()
-    solution = grover_one_solution(G3, k=4, verbose=True)
-    elapsed = time.time() - start
-    
-    if solution:
-        print(f"Time: {elapsed:.4f}s\n")
-
-
-#  GROVER WITH MULTIPLE SOLUTIONS
-
-def grover_multiple_solutions(G: Graph, k: int, verbose: bool = True) -> list:
-    if verbose:
-        n = G.n
-        search_space = math.comb(n, k)
-        max_iterations = math.ceil((math.pi / 4) * math.sqrt(search_space))
-        
-        print(f"\\n{'='*60}")
-        print(f"GROVER'S ALGORITHM - MULTIPLE SOLUTIONS")
-        print(f"{'='*60}")
-        print(f"Graph size: {n}")
-        print(f"Dominating set size: {k}")
-        print(f"Search space: {search_space}")
-        print(f"Max iterations: {max_iterations}")
-        print(f"\\n[Checking all combinations - Guaranteed to find]\\n")
-    
-    count = 0
-    # To Check ALL combinations for guaranteed solution
-    for subset in combinations(range(G.n), k):
-        count += 1
-        if _is_dominating_set(G, list(subset)):
-            if verbose:
-                print(f" Found solution after {count} checks: {list(subset)}")
-            return list(subset)
-    
-    if verbose:
-        print(f" No solution found after checking all {count} combinations")
-    
-    return None
-
-#EXPERIMENTAL EVALUATION - MULTIPLE SOLUTIONS
-
-def test_multiple_solutions():
-    '''Test Grover on graphs with multiple solutions.'''
-    
-    print("\n" + "="*70)
-    print("EXPERIMENTAL EVALUATION - MULTIPLE SOLUTIONS")
-    print("="*70)
-    
-    # Test Case 1: Complete graph K4
-    print("\n[Test 1] 4-node complete graph (K4), size 2\n")
-    G1 = Graph(4)
-    for i in range(4):
-        for j in range(i+1, 4):
-            G1.add_edge(i, j)
-    
-    print("Graph with 4 vertices:")
-    print("Vertex     Neighbors")
-    print("-" * 30)
-    for v in range(G1.n):
-        print(f"{v:<10} {str(G1.adj_list[v]):<20}")
-    
-    print("\nExpected: Multiple solutions possible\n")
-    
-    num_sols = _count_dominating_sets(G1, 2)
-    print(f"Total dominating sets: {num_sols}\n")
-    
-    start = time.time()
-    solution = grover_multiple_solutions(G1, k=2, verbose=True)
-    elapsed = time.time() - start
-    
-    if solution:
-        print(f" Found valid solution: {_is_dominating_set(G1, solution)}")
-        print(f"Time: {elapsed:.4f}s\n")
-    
-    # Test Case 2: 8-node cycle
-    print("\n" + "-"*70)
-    print("\n[Test 2] 8-node cycle graph, size 3")
-    print("Cycle graph with edges to neighbors\n")
-    
-    G2 = Graph(8)
-    for i in range(8):
-        G2.add_edge(i, (i+1) % 8)
-    
-    num_sols = _count_dominating_sets(G2, 3)
-    print(f"Total dominating sets: {num_sols}\n")
-    
-    start = time.time()
-    solution = grover_multiple_solutions(G2, k=3, verbose=True)
-    elapsed = time.time() - start
-    
-    if solution:
-        print(f" Found valid solution: {_is_dominating_set(G2, solution)}")
-        print(f"Time: {elapsed:.4f}s\n")
-
+    circuit.x(output)
+    circuit.measure(output, 0)
 
 def main():
     G = Graph(4)
@@ -689,13 +481,6 @@ def main():
     n_bits = numbers_to_bit_matrix(np.asarray([n]), bit_count)
     assert n == np.asarray(bit_matrix_to_numbers(n_bits))[0]
 
-     #  One Solution
-    test_one_solution()
-    
-    # Multiple Solutions
-    test_multiple_solutions()
-
-   
 
 if __name__=="__main__":
     main()
