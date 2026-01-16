@@ -462,7 +462,7 @@ def main():
 
     #Dominating Tests
     n = 1
-    n_bits = numbers_to_bit_matrix(np.asarray([n]), bit_count)
+    n_bits = numbers_to_bit_matrix(np.asarray(n), bit_count)
     assert n == np.asarray(bit_matrix_to_numbers(n_bits))[0]
 
 
