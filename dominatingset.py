@@ -182,15 +182,68 @@ def build_adj_circuit(graph: Graph, output: int | None = None, circuit: QuantumC
 
             ctrl_str = (u_ctrl_str + v_ctrl_str)[::-1]
             #Doing it this way is REALLY inefficient, the circuit depth will be crazy, and wont scale on a real quantum computer due to accumulated noise.
-            gates.append({'instruction': MCXGate()'qargs':combined_ctrl_qubits + [output], 'ctrl_state':ctrl_str})
+            gates.append({'instruction': MCXGate(num_ctrl_qubits=bit_count*2, ctrl_state=ctrl_str),'qargs':combined_ctrl_qubits + [output]})
 
     for gate in gates:
-        circuit.mcx(**gate)    
+        circuit.append(**gate)
+        circuit.barrier()    
     circuit.measure(output, 0)
     for gate in reversed(gates):
-        circuit.mcx(**gate) 
+        circuit.append(**gate) 
+        circuit.barrier()
     return ret_val
+
+
+def adjancency_of_edge(graph: Graph, circuit: QuantumCircuit, output: int, node: int, bit_count: int, control: list[int], inputs: list[list[int]] ):
+    u_bits = numbers_to_bit_matrix(np.asarray(node), bit_count)
+
+    gates = []
+
+        #u_sign = np.nonzero(u_bits) # get the indices of every bit set to one
+
+    edge_arr = graph.adj_list[node]
+    edge_arr = edge_arr[:edge_arr[-1]]
+    edge_binary = numbers_to_bit_matrix(edge_arr, bit_count)
+
+    u_ctrl_str = "".join(map(str, u_bits))
         
+    for v_bits in edge_binary:
+        v_ctrl_str = "".join(map(str, v_bits))
+
+        ctrl_str = (u_ctrl_str + v_ctrl_str)[::-1]
+        for input in inputs:
+            combined_ctrl_qubits = control + input
+            gates.append({'instruction': MCXGate(num_ctrl_qubits=bit_count*2, ctrl_state=ctrl_str),'qargs':combined_ctrl_qubits + [output]})
+
+    for gate in gates:
+        circuit.append(**gate)
+        circuit.barrier()    
+
+def invert_adjancency_of_edge(graph: Graph, circuit: QuantumCircuit, output: int, node: int, bit_count: int, control: list[int], inputs: list[list[int]] ):
+    u_bits = numbers_to_bit_matrix(np.asarray(node), bit_count)
+
+    gates = []
+
+        #u_sign = np.nonzero(u_bits) # get the indices of every bit set to one
+
+    edge_arr = graph.adj_list[node]
+    edge_arr = edge_arr[:edge_arr[-1]]
+    edge_binary = numbers_to_bit_matrix(edge_arr, bit_count)
+
+    u_ctrl_str = "".join(map(str, u_bits))
+        
+    for v_bits in edge_binary:
+        v_ctrl_str = "".join(map(str, v_bits))
+
+        ctrl_str = (u_ctrl_str + v_ctrl_str)[::-1]
+        for input in inputs:
+            combined_ctrl_qubits = control + input
+            gates.append({'instruction': MCXGate(num_ctrl_qubits=bit_count*2, ctrl_state=ctrl_str),'qargs':combined_ctrl_qubits + [output]})
+
+    for gate in reversed(gates):
+        circuit.append(**gate)
+        circuit.barrier()    
+
 # I'm assuming A and B are bit lists here
 def init_and_run_adjacent_circuit(graph: Graph, circuit: QuantumCircuit, A: npt.NDArray[np.uint8] | list[int], B: npt.NDArray[np.uint8] | list[int], output: int):
     try:
@@ -234,7 +287,7 @@ def or_gate(circuit: QuantumCircuit, inputs: list[int], output: int):
 
 
 # 
-def multi_equiv(circuit: QuantumCircuit, pattern: str, control: list[int], inputs: list[list[int]], auxiliary: int, output: int ) -> list[MCXGate]:
+def multi_equiv(circuit: QuantumCircuit, ctrl_bits: npt.NDArray[np.uint8], control: npt.NDArray[np.uint32], inputs: npt.NDArray[np.uint32], auxiliary: int):
     '''
     test if at least one of the input bitstrings and control contains pattern
     Effectively an expanded OR. 
@@ -252,11 +305,15 @@ def multi_equiv(circuit: QuantumCircuit, pattern: str, control: list[int], input
     :param output: output qbit
     :type output: int
     '''
-    circuit.x(output)
+    pattern = ("".join(map(str, ctrl_bits)) * 2)[::-1]
+    circuit.x(auxiliary)
     ctrl_state = '1' + pattern*2
     for input in inputs:
-        circuit.mcx()
-    circuit.x(output)
+        # We are also 
+        gate = MCXGate(len(pattern) + 1, ctrl_state="1" + pattern)
+        circuit.append(gate, control + input + [auxiliary] )
+
+    circuit.x(auxiliary)
 
 def xor_gate(circuit: QuantumCircuit, inputs, output: int):
     circuit.mcx(inputs[:-1], inputs[-1]) # Invert for AND
@@ -265,8 +322,15 @@ def xor_gate(circuit: QuantumCircuit, inputs, output: int):
 
 
 #Create Dominating sets, expects len(B) + len(A) registers each holding logv2 n bits, plus 2 qubits reserved for output/auxiliary
-def init_run_dominating_set(G: Graph, circuit: QuantumCircuit, A: npt.NDArray[np.uint32] | list[int], B: npt.NDArray[np.uint8] | list[int], auxiliary: int, output: int):
-    circuit.clear()
+def init_run_dominating_set(graph: Graph, circuit: QuantumCircuit, A: npt.NDArray[np.uint32] | list[int], B: npt.NDArray[np.uint8], auxiliary: int, output: int):
+    try:
+        bit_count = int(np.log2(graph.n).astype(dtype=np.uint32, casting='same_value'))
+    except ValueError:
+        raise Exception("graph n count must be a number which is a power of 2.")
+    
+    multi_equiv(circuit, B, np.arange(0, bit_count, dtype=np.uint32), np.arange(bit_count, bit_count * len(A), dtype=np.uint32), auxiliary)
+
+
 
 
 
