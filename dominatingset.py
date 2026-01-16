@@ -142,7 +142,7 @@ def numbers_to_bit_matrix(arr: npt.NDArray[np.int32], bit_count: int) -> npt.NDA
     return (np.bitwise_and(arr[:, None], used_mask) > 0).reshape(-1, bit_count).astype(np.uint8)
 
 #Naive binary circuit to check adjancency
-def build_adj_circuit(graph: Graph, output: int | None = None, circuit: QuantumCircuit | None = None ) -> Tuple[QuantumCircuit, list[int]] :
+def build_adj_circuit(graph: Graph, output: Optional[int] = None, circuit: Optional[QuantumCircuit] = None) -> Tuple[QuantumCircuit, List[int]]:
     try:
         bit_count = int(np.log2(graph.n))
     except ValueError:
