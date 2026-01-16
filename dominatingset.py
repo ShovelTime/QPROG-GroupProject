@@ -179,7 +179,7 @@ def build_adj_circuit(graph: Graph, output: Optional[int] = None, circuit: Optio
         combined_ctrl_qubits: list[int] = qubits_range[qubits_range != output][:bit_count * 2].tolist()
         ret_val = (circuit, combined_ctrl_qubits)
 
-    vertex_bits = numbers_to_bit_matrix(np.arange(0,graph.n, dtype=np.int32), bit_count)
+    vertex_bits = numbers_to_bit_matrix(np.arange(0,graph.n, dtype=np.uint32), bit_count)
 
     gates = []
 
@@ -407,6 +407,7 @@ def invert_dominating_node(graph: Graph, circuit: QuantumCircuit,
 
 
 
+# TODO: Inversion without losing output?
 def dominating_set(graph: Graph, circuit: QuantumCircuit, A: NDArray[np.uint8], auxiliary: NDArray[np.uint32], output: int):
     try:
         bit_count = np.array(np.log2(graph.n)).astype(np.uint32, casting='same_value')[0]
@@ -438,24 +439,66 @@ def dominating_set(graph: Graph, circuit: QuantumCircuit, A: NDArray[np.uint8], 
         initialize(circuit, u_bits, register_range[:bit_count])
 
         dominating_node(graph, circuit, A, u_bits, auxiliary[0])
-        #circuit.x(auxiliary[0])
 
-        # if 1 1 0 
-        circuit.cx(auxiliary[1], output) # 1 1 1
-        circuit.cx(auxiliary[1], auxiliary[0]) # If the fail flag is set, we do not invert a fail result
-        
+        circuit.cx(auxiliary[1], output) 
+        #circuit.cx(auxiliary[1], auxiliary[0]) # If the fail flag is set, we do not invert a fail result
+        circuit.x(auxiliary[0])
 
         circuit.ccx(auxiliary[0], output, auxiliary[1]) # Set 'Fail' Flag if result of dominating_node is False
         circuit.ccx(auxiliary[0], auxiliary[1], output) # set output to zero if Fail is set
-        circuit.cx([auxiliary[1]], output)
+        circuit.ccx(auxiliary[0], output, auxiliary[1]) # Revert if needed
 
-        #circuit.x(auxiliary[0])
+        circuit.x(auxiliary[0]) 
+        circuit.cx(auxiliary[1], output) 
+
         invert_dominating_node(graph, circuit, A, u_bits, auxiliary[0])
 
         deinitialize(circuit, u_bits, register_range[:bit_count])
 
+#Based on lecture 5 slides
+# TODO: Understand what is happening here
+def diffusion(circuit: QuantumCircuit, registers: NDArray[np.uint32]):
+    circuit.h(registers)
+    circuit.x(registers)
+    circuit.barrier()
+
+    #W Operation
+    circuit.h(registers[-1])
+    circuit.mcx(registers[:-1].tolist(), registers[-1])
+    circuit.h(registers[-1])
+
+    circuit.barrier()
+    circuit.x(registers)
+    circuit.h(registers)
+
+
+#dominating set variant which acts as a verifier circuit
+def _dominating_verifier(graph: Graph, circuit: QuantumCircuit, auxiliary: int, 
+                           A_registers: NDArray[np.uint32]):
+    
+
+def grover_one(graph: Graph, circuit: QuantumCircuit, auxiliary: NDArray[np.uint32], output: int, k: int):
+    try:
+        bit_count = np.array(np.log2(graph.n)).astype(np.uint32, casting='same_value')
+    except ValueError:
+        raise Exception("graph n-count must be a number which is a power of 2.")
+    
+    subset_size = k * bit_count
+
+    iteration_count = int(np.pi / 4.0 * np.sqrt(graph.n ** k))
+    
+    if output in auxiliary:
+        raise Exception("Output cannot be an auxiliary qubit for this implementation!")
+    if len(auxiliary) < 2:
+        raise Exception("grover_one() needs at least 2 auxiliary qubits!")
+    
+    assert circuit.num_qubits == subset_size + 3
+
     circuit.x(output)
-    circuit.measure(output, 0)
+    circuit.h(output) # following grover, output is sent into superposition
+
+
+    
 
 def main():
     G = Graph(4)
