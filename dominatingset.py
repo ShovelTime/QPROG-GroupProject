@@ -100,19 +100,6 @@ class Graph:
         v_list[v_idx] = u
         self.adj_list[v,-1] = v_len + 1
 
-    def is_edge(self, u: int, v: int) -> bool:
-        """
-        Check if an edge exists between vertices u and v.
-        
-        :param u: First vertex
-        :param v: Second vertex
-        :return: True if edge exists, False otherwise
-        """
-        u_list = self.adj_list[u, :-1]
-        u_len = self.adj_list[u, -1]
-        u_neighbours = u_list[:u_len]
-        return np.any(u_neighbours == v)
-
     def print(self, with_mask: bool = True):
         print("Adjacency graph with ", self.n, "vertices.\n")
 
@@ -468,7 +455,7 @@ def _is_dominating_set(G: Graph, vertices: list) -> bool:
         
         is_dominated = False
         for u in vertices_set:
-            if G.is_edge(u, v):
+            if G.is_connected(u, v):
                 is_dominated = True
                 break
         
