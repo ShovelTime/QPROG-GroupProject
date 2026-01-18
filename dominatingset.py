@@ -466,20 +466,111 @@ def diffusion(circuit: QuantumCircuit, registers: NDArray[np.uint32]):
     circuit.x(registers)
     circuit.h(registers)
 
+def __dominating_node(graph: Graph, circuit: QuantumCircuit, 
+                           B : NDArray[np.uint8],
+                           auxiliary: int,
+                           B_registers: NDArray[np.uint32],
+                           A_registers: NDArray[np.uint32]):
+    try:
+        bit_count = np.array(np.log2(graph.n)).astype(np.uint32, casting='same_value')[0]
+    except ValueError:
+        raise Exception("graph n-count must be a number which is a power of 2.")
+    
+    node = np.asarray(bit_matrix_to_numbers(B))[0]
+    
+    multi_equiv(circuit, B, B_registers, A_registers, auxiliary)
+    circuit.x(auxiliary)
+    adjancency_of_edge(graph, circuit, auxiliary, auxiliary, node, bit_count, B_registers, A_registers)
+    circuit.x(auxiliary)
+
+def __invert_dominating_node(graph: Graph, circuit: QuantumCircuit, 
+                           B : NDArray[np.uint8],
+                           auxiliary: int,
+                           B_registers: NDArray[np.uint32],
+                           A_registers: NDArray[np.uint32]):
+    try:
+        bit_count = np.array(np.log2(graph.n)).astype(np.uint32, casting='same_value')[0]
+    except ValueError:
+        raise Exception("graph n-count must be a number which is a power of 2.")
+    
+    node = np.asarray(bit_matrix_to_numbers(B))[0]
+    circuit.x(auxiliary)
+    invert_adjancency_of_edge(graph, circuit, auxiliary, auxiliary, node, bit_count, B_registers, A_registers)
+    circuit.x(auxiliary)
+    invert_multi_equiv(circuit, B, B_registers, A_registers, auxiliary)
 
 #dominating set variant which acts as a verifier circuit
-def _dominating_verifier(graph: Graph, circuit: QuantumCircuit, auxiliary: int, 
-                           A_registers: NDArray[np.uint32]):
+def __dominating_verifier(graph: Graph, circuit: QuantumCircuit, 
+                        auxiliary: NDArray[np.uint32], output: int,
+                        A_registers: NDArray[np.uint32],
+                        B_registers: NDArray[np.uint32]):
+    try:
+        bit_count = np.array(np.log2(graph.n)).astype(np.uint32, casting='same_value')[0]
+    except ValueError:
+        raise Exception("graph n-count must be a number which is a power of 2.")
+    if len(auxiliary) < 3:
+        raise Exception("dominating_set() needs at least 3 auxiliary qubits!")
+    
+    
+    vertex_bits = numbers_to_bit_matrix(np.array(np.arange(0, graph.n), np.uint32), bit_count)
+
+    assert circuit.num_qubits >= bit_count * A_registers + 3
+    assert auxiliary not in np.concatenate([A_registers, B_registers])
+
+    circuit.x(auxiliary[2])
+    for u_bits in vertex_bits:
+        initialize(circuit, u_bits, B_registers)
+
+        __dominating_node(graph, circuit, u_bits, auxiliary[0], B_registers, A_registers)
+
+        circuit.cx(auxiliary[1], auxiliary[2]) 
+        #circuit.cx(auxiliary[1], auxiliary[0]) # If the fail flag is set, we do not invert a fail result
+        circuit.x(auxiliary[0])
+
+        circuit.ccx(auxiliary[0], auxiliary[2], auxiliary[1]) # Set 'Fail' Flag if result of dominating_node is False
+        circuit.ccx(auxiliary[0], auxiliary[1], auxiliary[2]) # set output to zero if Fail is set
+        circuit.ccx(auxiliary[0], auxiliary[2], auxiliary[1]) # Revert if needed
+
+        circuit.x(auxiliary[0]) 
+        circuit.cx(auxiliary[1], auxiliary[2]) 
+
+        __invert_dominating_node(graph, circuit, u_bits, auxiliary[0], B_registers, A_registers)
+
+        deinitialize(circuit, u_bits, B_registers)
+    
+    circuit.cx(auxiliary[2], output)
+
+    for u_bits in vertex_bits[::-1]:
+        deinitialize(circuit, u_bits, B_registers)
+
+        __invert_dominating_node(graph, circuit, u_bits, auxiliary[0], B_registers, A_registers)
+
+        circuit.cx(auxiliary[1], auxiliary[2]) 
+        #circuit.cx(auxiliary[1], auxiliary[0]) # If the fail flag is set, we do not invert a fail result
+        circuit.x(auxiliary[0])
+
+        circuit.ccx(auxiliary[0], auxiliary[2], auxiliary[1]) # Set 'Fail' Flag if result of dominating_node is False
+        circuit.ccx(auxiliary[0], auxiliary[1], auxiliary[2]) # set output to zero if Fail is set
+        circuit.ccx(auxiliary[0], auxiliary[2], auxiliary[1]) # Revert if needed
+
+        circuit.x(auxiliary[0]) 
+        circuit.cx(auxiliary[1], auxiliary[2]) 
+
+        __dominating_node(graph, circuit, u_bits, auxiliary[0], B_registers, A_registers)
+
+        initialize(circuit, u_bits, B_registers)
+    circuit.x(auxiliary[2])
+    
     
 
 def grover_one(graph: Graph, circuit: QuantumCircuit, auxiliary: NDArray[np.uint32], output: int, k: int):
     try:
-        bit_count = np.array(np.log2(graph.n)).astype(np.uint32, casting='same_value')
+        bit_count = np.array(np.log2(graph.n)).astype(np.uint32, casting='same_value')[0]
     except ValueError:
         raise Exception("graph n-count must be a number which is a power of 2.")
     
-    subset_size = k * bit_count
-
+    # + 1 to account for the B register containing the vertex input
+    subset_size = k + 1 * bit_count
     iteration_count = int(np.pi / 4.0 * np.sqrt(graph.n ** k))
     
     if output in auxiliary:
@@ -489,11 +580,18 @@ def grover_one(graph: Graph, circuit: QuantumCircuit, auxiliary: NDArray[np.uint
     
     assert circuit.num_qubits == subset_size + 3
 
-    circuit.x(output)
-    circuit.h(output) # following grover, output is sent into superposition
+    B = np.arange(0, bit_count, dtype=np.uint32)
+    A = np.arange(bit_count, subset_size, dtype=np.uint32)
 
+    circuit.h(A)
 
-    
+    for _ in range(iteration_count):
+        circuit.barrier()
+        __dominating_verifier(graph, circuit, auxiliary, output, A, B)
+        diffusion(circuit, A)
+
+    circuit.measure(A, np.arange(0, len(A)))
+        
 
 def main():
     G = Graph(4)
