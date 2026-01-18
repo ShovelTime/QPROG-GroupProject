@@ -139,11 +139,11 @@ class Graph:
     
     #Get the minimum bit count to represent all n values in binary
     def get_bit_count(self) -> int:
-        return np.array(np.ceil(np.log2(self.n))).astype(np.uint32)[0]
+        return int(np.array(np.ceil(np.log2(self.n))).astype(np.uint32)) # type: ignore
     
     def get_bit_count_checked(self) -> int:
         try:
-            return np.array(np.log2(self.n)).astype(np.uint32, casting='same_value')[0]
+            return int(np.array(np.log2(self.n)).astype(np.uint32, casting='same_value'))# type: ignore
         except ValueError:
             raise Exception("graph n count must be a number which is a power of 2.")
 
@@ -214,6 +214,7 @@ def diffusion(circuit: QuantumCircuit, registers: NDArray[np.uint32]):
 ############################################################
 
 #Naive binary circuit to check adjancency
+# Since we are not performing any latching this version does not need auxiliary qbits.
 def build_adj_circuit(graph: Graph, output: Optional[int] = None, circuit: Optional[QuantumCircuit] = None) -> Tuple[QuantumCircuit, List[int]]:
 
     bit_count = graph.get_bit_count_checked()
@@ -252,7 +253,7 @@ def build_adj_circuit(graph: Graph, output: Optional[int] = None, circuit: Optio
 
             ctrl_str = (u_ctrl_str + v_ctrl_str)[::-1]
             #Doing it this way is REALLY inefficient, the circuit depth will be crazy, and wont scale on a real quantum computer due to accumulated noise.
-            gates.append({'instruction': MCXGate(num_ctrl_qubits=bit_count*2, ctrl_state=ctrl_str),'qargs':combined_ctrl_qubits + [output]})
+            gates.append({'instruction': MCXGate(bit_count*2, ctrl_state=ctrl_str),'qargs':combined_ctrl_qubits + [output]})
 
     for gate in gates:
         circuit.append(**gate)
@@ -264,7 +265,7 @@ def build_adj_circuit(graph: Graph, output: Optional[int] = None, circuit: Optio
     return ret_val
 
 # I'm assuming A and B are bit lists here
-def init_and_run_adjacent_circuit(graph: Graph, circuit: QuantumCircuit, A: NDArray[np.uint8], B: NDArray[np.uint8], output: int):
+def Adj(graph: Graph, circuit: QuantumCircuit, A: NDArray[np.uint8], B: NDArray[np.uint8], output: int):
 
     bit_count = graph.get_bit_count_checked()
 
@@ -280,21 +281,21 @@ def init_and_run_adjacent_circuit(graph: Graph, circuit: QuantumCircuit, A: NDAr
 
     return result.get_counts(t_circuit)
 
-def rerun_adjacent_circuit(circuit: QuantumCircuit, 
-                          A: NDArray[np.uint8],
-                          B: NDArray[np.uint8]):
-    gates = [n for n in circuit.data if n.label != 'initialize']
-    #init_state = '0' + ("".join(map(str, A)) + "".join(map(str, B)))[::-1]
-
-    circuit.clear()
-    initialize(circuit, A + B, np.arange(0, len(A) * 2, dtype=np.uint32))
-    circuit.append(gates)
-
-    simulator = AerSimulator()
-    t_circuit = transpile(circuit, simulator)
-    result = simulator.run(t_circuit, shots=10).result()
-
-    return result.get_counts(t_circuit)
+#def rerun_adjacent_circuit(circuit: QuantumCircuit, 
+#                          A: NDArray[np.uint8],
+#                          B: NDArray[np.uint8]):
+#    gates = [n for n in circuit.data if n.label != 'initialize']
+#    #init_state = '0' + ("".join(map(str, A)) + "".join(map(str, B)))[::-1]
+#
+#    circuit.clear()
+#    initialize(circuit, A + B, np.arange(0, len(A) * 2, dtype=np.uint32))
+#    circuit.append(**gates)
+#
+#    simulator = AerSimulator()
+#    t_circuit = transpile(circuit, simulator)
+#    result = simulator.run(t_circuit, shots=10).result()
+#
+#    return result.get_counts(t_circuit)
 
 
 

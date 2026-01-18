@@ -27,14 +27,38 @@ def test_adj_circuit():
 
     print("########################### Adjacent circuit Test ###########################")
 
-    edges = numbers_to_bit_matrix(np.array([2,3], np.uint32), G.get_bit_count())
-    circuit = QuantumCircuit(5,1)
-    counts = init_and_run_adjacent_circuit(G, circuit, edges[0], edges[1], 4)
+    true_edges = [2,3]
+    true_edges_bits = numbers_to_bit_matrix(np.array(true_edges, np.uint32), G.get_bit_count())
+    false_edges = [0,3]
+    false_edges_bits = numbers_to_bit_matrix(np.array(false_edges, np.uint32), G.get_bit_count())
 
-    if '1' not in counts.keys() or not G.is_connected(2,3):
+    circuit = QuantumCircuit(5,1)
+    counts = Adj(G, circuit, true_edges_bits[0], true_edges_bits[1], 4)
+
+    if bool(int(list(counts.keys())[0])) != G.is_connected(2,3):
         print(circuit)
         raise Exception("Test key mismatch! circuit output:", str(counts.keys()), "classical output: ", counts)
     else:
-        print("G_4 passed")
+        print("G_4 is_true passed")
+
+    counts = Adj(G, circuit, false_edges_bits[0] ,false_edges_bits[1], 4)
+
+    if int(list(counts.keys())[0]) != G.is_connected(0,3):
+        print(circuit)
+        raise Exception("Test key mismatch! circuit output:", str(counts.keys()), "classical output: ", counts)
+    else:
+        print("G_4 is_false passed")
+
+        
     
     print("########################### DONE ###########################")
+
+
+
+def main():
+    test_adj_circuit()
+
+
+
+if __name__=="__main__":
+    main()
