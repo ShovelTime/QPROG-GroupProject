@@ -417,7 +417,7 @@ def dominating_set(graph: Graph, circuit: QuantumCircuit, A: NDArray[np.uint8], 
     if output in auxiliary:
         raise Exception("Output cannot be an auxiliary qubit for this implementation!")
     if len(auxiliary) < 2:
-        raise Exception("dominating_set() needs at least 2 auxiliary qubits!")
+        raise Exception("dominating_set() needs at least 3 auxiliary qubits!")
     
     
     vertex_bits = numbers_to_bit_matrix(np.array(np.arange(0, graph.n), np.uint32), bit_count)
@@ -429,27 +429,22 @@ def dominating_set(graph: Graph, circuit: QuantumCircuit, A: NDArray[np.uint8], 
     assert output not in register_range and auxiliary not in register_range
 
     initialize(circuit, vertex_bits.flatten(), register_range[bit_count:]) # Initialize A's qubits
-
-    #circuit.x([output,auxiliary[1]]) # assume true, if something returns a false result, we will invert the output.
-    circuit.x(output)
-
-    offset = 0
-
+    circuit.x(auxiliary[2])
     for u_bits in vertex_bits:
         initialize(circuit, u_bits, register_range[:bit_count])
 
         dominating_node(graph, circuit, A, u_bits, auxiliary[0])
 
-        circuit.cx(auxiliary[1], output) 
+        circuit.cx(auxiliary[1], auxiliary[2]) 
         #circuit.cx(auxiliary[1], auxiliary[0]) # If the fail flag is set, we do not invert a fail result
         circuit.x(auxiliary[0])
 
-        circuit.ccx(auxiliary[0], output, auxiliary[1]) # Set 'Fail' Flag if result of dominating_node is False
-        circuit.ccx(auxiliary[0], auxiliary[1], output) # set output to zero if Fail is set
-        circuit.ccx(auxiliary[0], output, auxiliary[1]) # Revert if needed
+        circuit.ccx(auxiliary[0], auxiliary[2], auxiliary[1]) # Set 'Fail' Flag if result of dominating_node is False
+        circuit.ccx(auxiliary[0], auxiliary[1], auxiliary[2]) # set output to zero if Fail is set
+        circuit.ccx(auxiliary[0], auxiliary[2], auxiliary[1]) # Revert if needed
 
         circuit.x(auxiliary[0]) 
-        circuit.cx(auxiliary[1], output) 
+        circuit.cx(auxiliary[1], auxiliary[2]) 
 
         invert_dominating_node(graph, circuit, A, u_bits, auxiliary[0])
 
