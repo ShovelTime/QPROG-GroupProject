@@ -592,6 +592,18 @@ def grover_one(graph: Graph, circuit: QuantumCircuit, auxiliary: NDArray[np.uint
 
     circuit.measure(A, np.arange(0, len(A)))
         
+def classical_dominating_node(u: np.uint32, graph: Graph, A: NDArray[np.uint32]) -> bool:
+    if u in A: return True
+    return bool(np.any(np.isin(A, graph.adj_list[u])))
+#classical check of dominating set
+def classical_dominating_set(graph:Graph, candidate_set: NDArray[np.uint32]) -> bool:
+
+    vectorized = np.vectorize(is_dominating, excluded=['graph', 'A'])
+    results = vectorized(np.arange(0, graph.n), graph, candidate_set)
+    return results.any()
+    
+
+
 
 def main():
     G = Graph(4)
