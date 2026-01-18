@@ -1,7 +1,7 @@
 from typing import Any, Tuple, Union, Optional, List, Sequence
 import numpy as np
 import numpy.ma as ma
-from numpy.typing import NDArray
+from numpy.typing import NDArray, DTypeLike
 import math
 import time
 from qiskit import QuantumCircuit
@@ -136,7 +136,22 @@ class Graph:
         edges = edges[:edges[-1]]
         idx =  np.searchsorted(edges, v)
         return idx < len(edges) and edges[idx] == v # type: ignore # idx is guaranteed to be an integer, but the type system cannot see
+    
+    #Get the minimum bit count to represent all n values in binary
+    def get_bit_count(self) -> int:
+        return np.array(np.ceil(np.log2(self.n))).astype(np.uint32)[0]
+    
+    def get_bit_count_checked(self) -> int:
+        try:
+            return np.array(np.log2(self.n)).astype(np.uint32, casting='same_value')[0]
+        except ValueError:
+            raise Exception("graph n count must be a number which is a power of 2.")
 
+
+
+############################################################
+###################### HELPER METHODS ######################
+############################################################
 
 # method adapted from solution posted in https://discuss.datasciencedojo.com/t/how-can-an-array-of-integers-be-converted-into-a-binary-matrix/1056/2
 def numbers_to_bit_matrix(arr: NDArray[np.uint32], bit_count: int) -> NDArray[np.uint8]:
@@ -157,12 +172,51 @@ def bit_matrix_to_numbers(bit_matrix: NDArray[np.uint8]) -> NDArray[np.int32]:
     weights = np.array([1 << i for i in range(bit_count)], dtype=np.int32)
     return bit_matrix.dot(weights)
 
+#Basically X gates over only bits set to one
+def initialize(circuit: QuantumCircuit, bit_pattern: NDArray[np.uint8], registers: NDArray[np.uint32]):
+    indices = np.nonzero(bit_pattern) # find non zero bits to apply the X gate to to
+    circuit.x(registers[indices], label='initialize')
+
+#Alias for initialize, since the inverse of it is the same.
+def deinitialize(circuit: QuantumCircuit, bit_pattern: NDArray[np.uint8], registers: NDArray[np.uint32]):
+    initialize(circuit, bit_pattern, registers)
+
+# OR implementation without using the builtin OR, or requiring auxiliaries.
+def or_gate(circuit: QuantumCircuit, inputs: list[int], output: int):
+    circuit.x(inputs) # Invert for AND
+    circuit.mcx(inputs, output) # only an initial qubit state of |0> on all inputs will cause this to flip, which will cancel out the incoming NOT on the output gate, which effectively produces an OR-like output.
+    circuit.x(inputs + [output])
+
+def xor_gate(circuit: QuantumCircuit, inputs: list[int], output: int):
+    circuit.mcx(inputs[:-1], inputs[-1]) # Invert for AND
+    circuit.cx(inputs[-1], output) # if every bit was 1, then inputs[-1] will be zero, causing no flip
+    circuit.mcx(inputs[:-1], inputs[-1]) # Revert
+
+#Based on lecture 5 slides
+# TODO: Understand what is happening here
+def diffusion(circuit: QuantumCircuit, registers: NDArray[np.uint32]):
+    circuit.h(registers)
+    circuit.x(registers)
+    circuit.barrier()
+
+    #W Operation
+    circuit.h(registers[-1])
+    circuit.mcx(registers[:-1].tolist(), registers[-1])
+    circuit.h(registers[-1])
+
+    circuit.barrier()
+    circuit.x(registers)
+    circuit.h(registers)
+
+
+############################################################
+##################### QUANTUM CIRCUITS #####################
+############################################################
+
 #Naive binary circuit to check adjancency
 def build_adj_circuit(graph: Graph, output: Optional[int] = None, circuit: Optional[QuantumCircuit] = None) -> Tuple[QuantumCircuit, List[int]]:
-    try:
-        bit_count = np.array(np.log2(graph.n)).astype(np.uint32, casting='same_value')[0]
-    except ValueError:
-        raise Exception("graph n count must be a number which is a power of 2.")
+
+    bit_count = graph.get_bit_count_checked()
 
     if circuit == None:
         u_reg, v_reg = QuantumRegister(bit_count, "u"), QuantumRegister(bit_count, "v")
@@ -209,70 +263,10 @@ def build_adj_circuit(graph: Graph, output: Optional[int] = None, circuit: Optio
         circuit.barrier()
     return ret_val
 
-
-def adjancency_of_edge(graph: Graph, circuit: QuantumCircuit, 
-                       auxiliary:int, output: int, 
-                       node: int, bit_count: int, 
-                       control: NDArray[np.uint32], inputs: NDArray[np.uint32] ):
-    u_bits = numbers_to_bit_matrix(np.asarray(node), bit_count)
-
-    extra_registers = [auxiliary, output] # no duplicates in qargs in the event that they are the same
-    gates = []
-
-    edge_arr = graph.adj_list[node]
-    edge_arr = edge_arr[:edge_arr[-1]]
-    edge_binary = numbers_to_bit_matrix(edge_arr, bit_count)
-
-    u_ctrl_str = "".join(map(str, u_bits))
-        
-    for v_bits in edge_binary:
-        v_ctrl_str = "".join(map(str, v_bits))
-
-        ctrl_str = (u_ctrl_str + v_ctrl_str)[::-1]
-        for input in inputs:
-            combined_ctrl_qubits = control + input + [auxiliary]
-            gates.append({'instruction': MCXGate(num_ctrl_qubits=bit_count*2 + 1, ctrl_state="1" + ctrl_str),'qargs':combined_ctrl_qubits + extra_registers})
-
-    for gate in gates:
-        circuit.append(**gate)
-        circuit.barrier()    
-
-def invert_adjancency_of_edge(graph: Graph, circuit: QuantumCircuit, 
-                              auxiliary: int, output: int, 
-                              node: int, bit_count: int, 
-                              control: NDArray[np.uint32], inputs: NDArray[np.uint32] ):
-    u_bits = numbers_to_bit_matrix(np.asarray(node), bit_count)
-
-    extra_registers = list(set([output, auxiliary]))
-
-    gates = []
-
-        #u_sign = np.nonzero(u_bits) # get the indices of every bit set to one
-
-    edge_arr = graph.adj_list[node]
-    edge_arr = edge_arr[:edge_arr[-1]]
-    edge_binary = numbers_to_bit_matrix(edge_arr, bit_count)
-
-    u_ctrl_str = "".join(map(str, u_bits))
-        
-    for v_bits in edge_binary:
-        v_ctrl_str = "".join(map(str, v_bits))
-
-        ctrl_str = (u_ctrl_str + v_ctrl_str)[::-1]
-        for input in inputs:
-            combined_ctrl_qubits = control + input + [auxiliary]
-            gates.append({'instruction': MCXGate(num_ctrl_qubits=bit_count*2 + 1, ctrl_state="1" + ctrl_str),'qargs':combined_ctrl_qubits + [extra_registers]})
-
-    for gate in reversed(gates):
-        circuit.append(**gate)
-        circuit.barrier()    
-
 # I'm assuming A and B are bit lists here
 def init_and_run_adjacent_circuit(graph: Graph, circuit: QuantumCircuit, A: NDArray[np.uint8], B: NDArray[np.uint8], output: int):
-    try:
-        bit_count = np.array(np.log2(graph.n)).astype(np.uint32, casting='same_value')[0]
-    except ValueError:
-        raise Exception("graph n count must be a number which is a power of 2.")
+
+    bit_count = graph.get_bit_count_checked()
 
     circuit.clear()
 
@@ -302,31 +296,13 @@ def rerun_adjacent_circuit(circuit: QuantumCircuit,
 
     return result.get_counts(t_circuit)
 
-#Own implementation of qiskit's Initialize
-def initialize(circuit: QuantumCircuit, bit_pattern: NDArray[np.uint8], registers: NDArray[np.uint32]):
-    indices = np.nonzero(bit_pattern) # find non zero bits to apply the X gate to to
-    for idx in indices:
-        circuit.x(registers[idx], label='initialize')
 
-#Alias for initialize, since the inverse of it is the same.
-def deinitialize(circuit: QuantumCircuit, bit_pattern: NDArray[np.uint8], registers: NDArray[np.uint32]):
-    initialize(circuit, bit_pattern, registers)
 
-# OR implementation without using the builtin OR, or requiring auxiliaries.
-def or_gate(circuit: QuantumCircuit, inputs: list[int], output: int):
-    circuit.x(inputs) # Invert for AND
-    circuit.mcx(inputs, output) # only an initial qubit state of |0> on all inputs will cause this to flip, which will cancel out the incoming NOT on the output gate, which effectively produces an OR-like output.
-    circuit.x(inputs + [output])
-
-def xor_gate(circuit: QuantumCircuit, inputs: list[int], output: int):
-    circuit.mcx(inputs[:-1], inputs[-1]) # Invert for AND
-    circuit.cx(inputs[-1], output) # if every bit was 1, then inputs[-1] will be zero, causing no flip
-    circuit.mcx(inputs[:-1], inputs[-1]) # Revert
-
-def multi_equiv(circuit: QuantumCircuit, ctrl_bits: NDArray[np.uint8], control: NDArray[np.uint32], inputs: NDArray[np.uint32], auxiliary: int):
+# Version specifically for Grover, which is why there is an auxiliary
+# Auxiliary prevents further computations if it is set to one
+def multi_equiv(circuit: QuantumCircuit, ctrl_bits: NDArray[np.uint8], control: NDArray[np.uint32], inputs: NDArray[np.uint32], output: int, auxiliary: int | None = None):
     '''
-    test if at least one of the input bitstrings and control contains pattern
-    Effectively an expanded OR. 
+    test if at least one of the input bitstrings and control contains pattern.
     
     :param circuit: target circuit
     :type circuit: QuantumCircuit
@@ -341,78 +317,158 @@ def multi_equiv(circuit: QuantumCircuit, ctrl_bits: NDArray[np.uint8], control: 
     :param output: output qbit
     :type output: int
     '''
+    bit_count = len(ctrl_bits)
     pattern = ("".join(map(str, ctrl_bits)) * 2)[::-1]
-    circuit.x(auxiliary)
-    ctrl_state = '1' + pattern
-    for input in inputs:
-        gate = MCXGate(len(ctrl_state), ctrl_state=ctrl_state)
-        circuit.append(gate, control + input + [auxiliary] )
 
-    circuit.x(auxiliary)
+    if auxiliary is not None:
+        ctrl_state = "0" + pattern
+        extra_qubits = [auxiliary, output]
+    else:
+        ctrl_state = pattern
+        extra_qubits = [output]
+    #circuit.x(auxiliary)
+    for input in inputs.reshape((-1, bit_count)):
+        gate = MCXGate(len(ctrl_state), ctrl_state=ctrl_state)
+        qargs = np.concat([control, input, extra_qubits], dtype=np.uint32)
+        circuit.append(gate, qargs.tolist())
+
+    #circuit.x(auxiliary)
     circuit.barrier()
 
-def invert_multi_equiv(circuit: QuantumCircuit, ctrl_bits: NDArray[np.uint8], control: NDArray[np.uint32], inputs: NDArray[np.uint32], auxiliary: int):
+def invert_multi_equiv(circuit: QuantumCircuit, ctrl_bits: NDArray[np.uint8], control: NDArray[np.uint32], inputs: NDArray[np.uint32], output: int, auxiliary: int | None = None):
+    bit_count = len(ctrl_bits)
     pattern = ("".join(map(str, ctrl_bits)) * 2)[::-1]
-    circuit.x(auxiliary)
-    ctrl_state = '1' + pattern
-    for input in reversed(inputs):
-        # We are also 
-        gate = MCXGate(len(ctrl_state), ctrl_state=ctrl_state)
-        circuit.append(gate, control + input + [auxiliary] )
 
-    circuit.x(auxiliary)
+    if auxiliary is not None:
+        ctrl_state = "0" + pattern
+        extra_qubits = [auxiliary, output]
+    else:
+        ctrl_state = pattern
+        extra_qubits = [output]
+    #circuit.x(auxiliary)
+    ctrl_state = "0" + pattern
+    for input in reversed(inputs.reshape((-1, bit_count))):
+        gate = MCXGate(len(ctrl_state), ctrl_state=ctrl_state)
+        qargs = np.concat([control, input, extra_qubits], dtype=np.uint32)
+        circuit.append(gate, qargs.tolist())
+
+    #circuit.x(auxiliary)
     circuit.barrier()
+
+# Version specifically for Grover, which is why there is an auxiliary
+# Auxiliary prevents further computations if it is set to one
+def __adjancency_of_edge(graph: Graph, circuit: QuantumCircuit, 
+                       auxiliary:Optional[int], output: int, 
+                       node: int, bit_count: int, 
+                       control: NDArray[np.uint32], inputs: NDArray[np.uint32] ):
+    u_bits = numbers_to_bit_matrix(np.asarray(node), bit_count)
+
+    if auxiliary is not None:
+        extra_registers = [auxiliary, output]
+        extra_pattern = "0"
+    else:
+        extra_registers = [output]
+        extra_pattern = ""
+
+    gates = []
+
+    edge_arr = graph.adj_list[node]
+    edge_arr = edge_arr[:edge_arr[-1]]
+    edge_binary = numbers_to_bit_matrix(edge_arr, bit_count)
+
+    u_ctrl_str = "".join(map(str, u_bits))
+        
+    for v_bits in edge_binary:
+        v_ctrl_str = "".join(map(str, v_bits))
+
+        ctrl_str = (u_ctrl_str + v_ctrl_str)[::-1]
+        for input in inputs:
+            combined_ctrl_qubits = np.concatenate([control, inputs])
+            gates.append({'instruction': MCXGate(num_ctrl_qubits=bit_count*2 + 1, ctrl_state=extra_pattern + ctrl_str),'qargs':np.concatenate([combined_ctrl_qubits, extra_registers])})
+            
+
+    for gate in gates:
+        circuit.append(**gate)
+        circuit.barrier()    
+
+def __invert_adjancency_of_edge(graph: Graph, circuit: QuantumCircuit, 
+                              auxiliary: Optional[int], output: int, 
+                              node: int, bit_count: int, 
+                              control: NDArray[np.uint32], inputs: NDArray[np.uint32] ):
+    u_bits = numbers_to_bit_matrix(np.asarray(node), bit_count)
+
+    if auxiliary is not None:
+        extra_registers = [auxiliary, output]
+        extra_pattern = "0"
+    else:
+        extra_registers = [output]
+        extra_pattern = ""
+
+    gates = []
+
+        #u_sign = np.nonzero(u_bits) # get the indices of every bit set to one
+
+    edge_arr = graph.adj_list[node]
+    edge_arr = edge_arr[:edge_arr[-1]]
+    edge_binary = numbers_to_bit_matrix(edge_arr, bit_count)
+
+    u_ctrl_str = "".join(map(str, u_bits))
+        
+    for v_bits in edge_binary:
+        v_ctrl_str = "".join(map(str, v_bits))
+
+        ctrl_str = (u_ctrl_str + v_ctrl_str)[::-1]
+        for input in inputs:
+            combined_ctrl_qubits = control + input + [auxiliary]
+            gates.append({'instruction': MCXGate(num_ctrl_qubits=bit_count*2 + 1, ctrl_state= extra_pattern + ctrl_str),'qargs':combined_ctrl_qubits + [extra_registers]})
+
+    for gate in reversed(gates):
+        circuit.append(**gate)
+        circuit.barrier()    
 
 #Create Dominating sets, expects len(B) + len(A) registers each holding logv2 n bits, plus at least 1 qubits reserved for output/auxiliary
 def dominating_node(graph: Graph, circuit: QuantumCircuit, 
                            A: NDArray[np.uint8], 
                            B: NDArray[np.uint8], 
                            auxiliary: int,
+                           output: int, 
                            B_register: NDArray[np.uint32] | None = None,
                            A_registers: NDArray[np.uint32] | None = None):
-    try:
-        bit_count = np.array(np.log2(graph.n)).astype(np.uint32, casting='same_value')[0]
-    except ValueError:
-        raise Exception("graph n-count must be a number which is a power of 2.")
+    bit_count = graph.get_bit_count_checked()
     
     node = np.asarray(bit_matrix_to_numbers(B))[0]
     if B_register is None: B_register = np.arange(0, bit_count, dtype=np.uint32)
     if A_registers is None: A_registers = np.arange(bit_count, bit_count * (len(A) + 1), dtype=np.uint32).reshape(len(A), bit_count)
     
-    multi_equiv(circuit, B, B_register, A_registers, auxiliary)
-    circuit.x(auxiliary)
-    adjancency_of_edge(graph, circuit, auxiliary, auxiliary, node, bit_count, B_register, A_registers)
-    circuit.x(auxiliary)
+    multi_equiv(circuit, B, B_register, A_registers, output=output, auxiliary=auxiliary)
+    circuit.cx(output, auxiliary)
+    __adjancency_of_edge(graph, circuit, auxiliary, output, node, bit_count, B_register, A_registers)
+    circuit.cx(output, auxiliary)
     #circuit.measure(output, 0)
 
 def invert_dominating_node(graph: Graph, circuit: QuantumCircuit, 
                            A: NDArray[np.uint8], 
                            B: NDArray[np.uint8], 
-                           auxiliary: int, 
+                           auxiliary: int,
+                           output: int, 
                            B_register: NDArray[np.uint32] | None = None,
                            A_registers: NDArray[np.uint32] | None = None):
-    try:
-        bit_count = int(np.log2(graph.n))
-    except ValueError:
-        raise Exception("graph n-count must be a number which is a power of 2.")
+    bit_count = graph.get_bit_count_checked()
     
     node = np.asarray(bit_matrix_to_numbers(B))[0]
     if B_register is None: B_register = np.arange(0, bit_count, dtype=np.uint32)
     if A_registers is None: A_registers = np.arange(bit_count, bit_count * (len(A) + 1), dtype=np.uint32).reshape(len(A), bit_count)
 
-    circuit.x(auxiliary)
-    invert_adjancency_of_edge(graph, circuit, auxiliary, auxiliary, node, bit_count, B_register, A_registers)
-    circuit.x(auxiliary)
-    invert_multi_equiv(circuit, B, B_register, A_registers, auxiliary)
+    circuit.cx(output, auxiliary)
+    __invert_adjancency_of_edge(graph, circuit, auxiliary, output, node, bit_count, B_register, A_registers)
+    circuit.cx(output, auxiliary)
+    invert_multi_equiv(circuit, B, B_register, A_registers, output=output, auxiliary=auxiliary)
 
 
 
 # TODO: Inversion without losing output?
 def dominating_set(graph: Graph, circuit: QuantumCircuit, A: NDArray[np.uint8], auxiliary: NDArray[np.uint32], output: int):
-    try:
-        bit_count = np.array(np.log2(graph.n)).astype(np.uint32, casting='same_value')[0]
-    except ValueError:
-        raise Exception("graph n-count must be a number which is a power of 2.")
+    bit_count = graph.get_bit_count_checked()
     
     if output in auxiliary:
         raise Exception("Output cannot be an auxiliary qubit for this implementation!")
@@ -433,7 +489,7 @@ def dominating_set(graph: Graph, circuit: QuantumCircuit, A: NDArray[np.uint8], 
     for u_bits in vertex_bits:
         initialize(circuit, u_bits, register_range[:bit_count])
 
-        dominating_node(graph, circuit, A, u_bits, auxiliary[0])
+        dominating_node(graph, circuit, A, u_bits, auxiliary[1], auxiliary[0])
 
         circuit.cx(auxiliary[1], auxiliary[2]) 
         #circuit.cx(auxiliary[1], auxiliary[0]) # If the fail flag is set, we do not invert a fail result
@@ -446,46 +502,31 @@ def dominating_set(graph: Graph, circuit: QuantumCircuit, A: NDArray[np.uint8], 
         circuit.x(auxiliary[0]) 
         circuit.cx(auxiliary[1], auxiliary[2]) 
 
-        invert_dominating_node(graph, circuit, A, u_bits, auxiliary[0])
+        invert_dominating_node(graph, circuit, A, u_bits, auxiliary[1], auxiliary[0])
 
         deinitialize(circuit, u_bits, register_range[:bit_count])
 
-#Based on lecture 5 slides
-# TODO: Understand what is happening here
-def diffusion(circuit: QuantumCircuit, registers: NDArray[np.uint32]):
-    circuit.h(registers)
-    circuit.x(registers)
-    circuit.barrier()
+    circuit.cx(auxiliary[2], output)
 
-    #W Operation
-    circuit.h(registers[-1])
-    circuit.mcx(registers[:-1].tolist(), registers[-1])
-    circuit.h(registers[-1])
-
-    circuit.barrier()
-    circuit.x(registers)
-    circuit.h(registers)
 
 def __dominating_node(graph: Graph, circuit: QuantumCircuit, 
                            B : NDArray[np.uint8],
-                           auxiliary: int,
+                           auxiliary: NDArray[np.uint32],
                            B_registers: NDArray[np.uint32],
                            A_registers: NDArray[np.uint32]):
-    try:
-        bit_count = np.array(np.log2(graph.n)).astype(np.uint32, casting='same_value')[0]
-    except ValueError:
-        raise Exception("graph n-count must be a number which is a power of 2.")
+    bit_count = graph.get_bit_count_checked()
     
     node = np.asarray(bit_matrix_to_numbers(B))[0]
     
-    multi_equiv(circuit, B, B_registers, A_registers, auxiliary)
-    circuit.x(auxiliary)
-    adjancency_of_edge(graph, circuit, auxiliary, auxiliary, node, bit_count, B_registers, A_registers)
-    circuit.x(auxiliary)
+    multi_equiv(circuit, B, B_registers, A_registers, auxiliary=auxiliary[1],output=auxiliary[0])
+    circuit.cx(auxiliary[0], auxiliary[1])
+    __adjancency_of_edge(graph, circuit, auxiliary=auxiliary[1], output=auxiliary[0], node=node, bit_count=bit_count, control=B_registers, inputs=A_registers)
+    circuit.cx(auxiliary[0], auxiliary[1])
+
 
 def __invert_dominating_node(graph: Graph, circuit: QuantumCircuit, 
                            B : NDArray[np.uint8],
-                           auxiliary: int,
+                           auxiliary: NDArray[np.uint32],
                            B_registers: NDArray[np.uint32],
                            A_registers: NDArray[np.uint32]):
     try:
@@ -494,10 +535,10 @@ def __invert_dominating_node(graph: Graph, circuit: QuantumCircuit,
         raise Exception("graph n-count must be a number which is a power of 2.")
     
     node = np.asarray(bit_matrix_to_numbers(B))[0]
-    circuit.x(auxiliary)
-    invert_adjancency_of_edge(graph, circuit, auxiliary, auxiliary, node, bit_count, B_registers, A_registers)
-    circuit.x(auxiliary)
-    invert_multi_equiv(circuit, B, B_registers, A_registers, auxiliary)
+    circuit.cx(auxiliary[0], auxiliary[1])
+    __invert_adjancency_of_edge(graph, circuit, auxiliary=auxiliary[1], output=auxiliary[0], node=node, bit_count=bit_count, control=B_registers, inputs=A_registers)
+    circuit.cx(auxiliary[0], auxiliary[1])
+    invert_multi_equiv(circuit, B, B_registers, A_registers, auxiliary=auxiliary[1], output=auxiliary[0])
 
 #dominating set variant which acts as a verifier circuit
 def __dominating_verifier(graph: Graph, circuit: QuantumCircuit, 
@@ -521,7 +562,7 @@ def __dominating_verifier(graph: Graph, circuit: QuantumCircuit,
     for u_bits in vertex_bits:
         initialize(circuit, u_bits, B_registers)
 
-        __dominating_node(graph, circuit, u_bits, auxiliary[0], B_registers, A_registers)
+        __dominating_node(graph, circuit, u_bits, auxiliary[:2], B_registers, A_registers)
 
         circuit.cx(auxiliary[1], auxiliary[2]) 
         #circuit.cx(auxiliary[1], auxiliary[0]) # If the fail flag is set, we do not invert a fail result
@@ -534,12 +575,13 @@ def __dominating_verifier(graph: Graph, circuit: QuantumCircuit,
         circuit.x(auxiliary[0]) 
         circuit.cx(auxiliary[1], auxiliary[2]) 
 
-        __invert_dominating_node(graph, circuit, u_bits, auxiliary[0], B_registers, A_registers)
+        __invert_dominating_node(graph, circuit, u_bits, auxiliary[:2], B_registers, A_registers)
 
         deinitialize(circuit, u_bits, B_registers)
     
     circuit.cx(auxiliary[2], output)
 
+# Inversion
     for u_bits in vertex_bits[::-1]:
         deinitialize(circuit, u_bits, B_registers)
 
@@ -563,7 +605,7 @@ def __dominating_verifier(graph: Graph, circuit: QuantumCircuit,
     
     
 
-def grover_one(graph: Graph, circuit: QuantumCircuit, auxiliary: NDArray[np.uint32], output: int, k: int):
+def grover(graph: Graph, circuit: QuantumCircuit, auxiliary: NDArray[np.uint32], output: int, k: int):
     try:
         bit_count = np.array(np.log2(graph.n)).astype(np.uint32, casting='same_value')[0]
     except ValueError:
@@ -592,42 +634,58 @@ def grover_one(graph: Graph, circuit: QuantumCircuit, auxiliary: NDArray[np.uint
 
     circuit.measure(A, np.arange(0, len(A)))
         
-def classical_dominating_node(u: np.uint32, graph: Graph, A: NDArray[np.uint32]) -> bool:
+def classical_dominating_node(u: np.uint32, graph: Graph, A: NDArray[np.uint32]) -> np.bool | bool:
     if u in A: return True
-    return bool(np.any(np.isin(A, graph.adj_list[u])))
+    adj_check = np.isin(A, graph.adj_list[u])
+    return adj_check.any()
 #classical check of dominating set
-def classical_dominating_set(graph:Graph, candidate_set: NDArray[np.uint32]) -> bool:
+def classical_dominating_set(graph:Graph, candidate_set: NDArray[np.uint32]) -> np.bool | bool:
 
-    vectorized = np.vectorize(is_dominating, excluded=['graph', 'A'])
-    results = vectorized(np.arange(0, graph.n), graph, candidate_set)
+    node_check = np.vectorize(classical_dominating_node, excluded=['graph', 'A'])
+    results = node_check(np.arange(0, graph.n), graph, candidate_set)
     return results.any()
     
 
+#############################################################
+########################### TESTS ###########################
+#############################################################
 
+def get_test_graphs() -> list[Graph]:
+    G_4 = Graph(4)
+    G_4.add_edge(0, 1)
+    G_4.add_edge(0, 3)
+    G_4.add_edge(1, 2)
+    G_4.add_edge(1, 3)
+    G_4.add_edge(2, 3)
+    G_4.print()
 
-def main():
-    G = Graph(4)
-    G.add_edge(0, 1)
-    G.add_edge(0, 3)
-    G.add_edge(1, 2)
-    G.add_edge(1, 3)
-    G.add_edge(2, 3)
-    G.print()
+    G_8 = Graph(8)
 
-    bit_count = 2 # log2 of 4
+    G_16 = Graph(16)
 
-    edges = numbers_to_bit_matrix(np.array([2,3], np.uint32), bit_count)
+    return [G_4, G_8, G_16]
+
+def test_adj_circuit():
+    graphs = get_test_graphs()
+    
+    G = graphs[0]
+
+    edges = numbers_to_bit_matrix(np.array([2,3], np.uint32), G.get_bit_count())
     circuit = QuantumCircuit(5,1)
-    #circuit, list = build_adj_circuit(G, -1)
     print(init_and_run_adjacent_circuit(G, circuit, edges[0], edges[1], 4))
     print(circuit)
 
-  
+
+def main():
+
+
+
 
     #Dominating Tests
     n = 1
     n_bits = numbers_to_bit_matrix(np.asarray([n]), bit_count)
     assert n == np.asarray(bit_matrix_to_numbers(n_bits))[0]
+
 
 
 if __name__=="__main__":
